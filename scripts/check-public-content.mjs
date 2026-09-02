@@ -33,6 +33,8 @@ export const allowedUrlPatterns = [
   /^https?:\/\/(?:www\.)?apache\.org\//,
   /^https:\/\/api\.getmillwork\.dev\//,
   /^https?:\/\/docs\.npmjs\.com\//,
+  // Pinned, checksum-verified CI tooling download only.
+  /^https:\/\/github\.com\/rhysd\/actionlint\//,
 ];
 
 export const forbiddenPatterns = [
