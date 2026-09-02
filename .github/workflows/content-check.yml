@@ -1,0 +1,33 @@
+# Deterministic public-content gate. Fails any pull request or push to main
+# whose tree violates the export content rules in
+# scripts/check-public-content.mjs.
+
+name: content-check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Pin Node.js 22.14.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.14.0"
+
+      - name: Check public content rules
+        run: node scripts/check-public-content.mjs
+
+      - name: Prove every deny class fails for its intended reason
+        run: node --test scripts/test-check-public-content.mjs

@@ -1,0 +1,1 @@
+{"version":3,"file":"modelSourceProfiles.js","sourceRoot":"","sources":["../../src/resources/modelSourceProfiles.ts"],"names":[],"mappings":"AAGA;;;;GAIG;AACH,MAAM,OAAO,2BAA2B;IACT;IAA7B,YAA6B,IAAgB;QAAhB,SAAI,GAAJ,IAAI,CAAY;IAAG,CAAC;IAEjD,KAAK,CAAC,IAAI;QACR,OAAO,IAAI,CAAC,IAAI,CAAC,OAAO,CAAuB;YAC7C,MAAM,EAAE,KAAK;YACb,IAAI,EAAE,uBAAuB;SAC9B,CAAC,CAAC;IACL,CAAC;CACF"}
