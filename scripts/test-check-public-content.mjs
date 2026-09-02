@@ -117,12 +117,20 @@ test("URLs outside the allowed public set fail closed", () => {
   onlyFailure(scanTextContent("README.md", "see https://example.com/private", existsAlways), "disallowed-url");
 });
 
+test("documentation URL lookalikes fail closed", () => {
+  onlyFailure(
+    scanTextContent("SUPPORT.md", "see https://docs.getmillwork.dev.evil/help", existsAlways),
+    "disallowed-url",
+  );
+});
+
 test("allowed public URLs stay legal", () => {
   const sample = [
     "https://github.com/millworkdev/solver.git",
     "https://www.npmjs.com/package/@millwork/solver",
     "https://registry.npmjs.org",
     "https://api.getmillwork.dev/v1",
+    "https://docs.getmillwork.dev",
   ].join(" ");
   assert.deepEqual(scanTextContent("README.md", sample, existsAlways), []);
 });

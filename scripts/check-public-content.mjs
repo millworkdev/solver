@@ -32,6 +32,7 @@ export const allowedUrlPatterns = [
   /^https:\/\/registry\.npmjs\.org(?:\/|$)/,
   /^https?:\/\/(?:www\.)?apache\.org\//,
   /^https:\/\/api\.getmillwork\.dev\//,
+  /^https:\/\/docs\.getmillwork\.dev(?:\/|$)/,
   /^https?:\/\/docs\.npmjs\.com\//,
 ];
 
