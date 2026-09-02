@@ -1,0 +1,104 @@
+# Trusted-publishing workflow for @millwork/solver.
+#
+# Runs ONLY on explicit operator dispatch against the protected `npm-publish`
+# environment. Publishes exactly one new immutable version via npm trusted
+# publishing (OIDC, provenance) under a non-default dist-tag. It refuses to
+# run if the version already exists on the registry, refuses the `latest`
+# dist-tag, and carries no npm auth token anywhere.
+#
+# Preconditions the operator must complete before the first dispatch:
+#   1. Create and protect the `npm-publish` environment (required reviewers).
+#   2. Configure the npm-side trusted publisher for @millwork/solver:
+#      repository millworkdev/solver, workflow publish.yml,
+#      environment npm-publish. Until then, publish fails closed (no token).
+
+name: publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      dist-tag:
+        description: "npm dist-tag for the published version (never latest)"
+        required: true
+        default: "candidate"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: npm-publish
+    env:
+      DIST_TAG: ${{ inputs.dist-tag }}
+    steps:
+      - name: Check out the dispatched ref
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Pin Node.js 22.14.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.14.0"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Pin npm CLI 11.5.1
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.5.1
+          node_version="$(node --version)"
+          npm_version="$(npm --version)"
+          echo "node ${node_version} / npm ${npm_version}"
+          test "${node_version}" = "v22.14.0"
+          test "${npm_version}" = "11.5.1"
+
+      - name: Check public content rules
+        run: node scripts/check-public-content.mjs
+
+      - name: Refuse a forbidden or malformed dist-tag
+        run: |
+          set -euo pipefail
+          if [ "${DIST_TAG}" = "latest" ]; then
+            echo "::error::Refusing to publish to the default dist-tag 'latest'. This workflow never moves latest."
+            exit 1
+          fi
+          if ! printf '%s' "${DIST_TAG}" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,63}$'; then
+            echo "::error::dist-tag '${DIST_TAG}' does not match the required pattern ^[a-z0-9][a-z0-9._-]{0,63}$."
+            exit 1
+          fi
+
+      - name: Refuse to republish an existing version
+        run: |
+          set -euo pipefail
+          package_name="$(node --print "require('./package.json').name")"
+          package_version="$(node --print "require('./package.json').version")"
+          test "${package_name}" = "@millwork/solver"
+          lookup_status=0
+          lookup_output="$(npm view "${package_name}@${package_version}" version --registry=https://registry.npmjs.org 2>&1)" || lookup_status=$?
+          if [ "${lookup_status}" -eq 0 ]; then
+            echo "::error::${package_name}@${package_version} already exists on the registry. Published versions are immutable; bump the version instead."
+            exit 1
+          fi
+          # Only a definitive 404 (version absent) may proceed. Any other
+          # registry failure is indistinguishable from an unsafe state.
+          if ! printf '%s' "${lookup_output}" | grep -q 'E404'; then
+            echo "::error::Registry lookup for ${package_name}@${package_version} failed for a reason other than E404; refusing to publish blind."
+            printf '%s\n' "${lookup_output}"
+            exit 1
+          fi
+          echo "${package_name}@${package_version} is unpublished; safe to proceed."
+
+      - name: Publish with OIDC provenance
+        run: |
+          set -euo pipefail
+          if [ -n "${NODE_AUTH_TOKEN:-}" ] || [ -n "${NPM_TOKEN:-}" ]; then
+            echo "::error::An npm auth token is present in the environment; trusted publishing must be token-free."
+            exit 1
+          fi
+          npm publish --provenance --tag "${DIST_TAG}" --registry=https://registry.npmjs.org
