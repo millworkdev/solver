@@ -31,6 +31,32 @@ set and every repository-only file against the export content rules, and
 [`.github/workflows/content-check.yml`](.github/workflows/content-check.yml)
 runs it on every pull request and push to `main`.
 
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) adds the guard set
+this repository shares with the sibling MCP publishing repository, also on
+every pull request and push to `main`:
+
+- `scripts/check-packed-files.mjs` — the packed file set must equal exactly
+  the committed, reviewed `dist/` tree plus the three files npm always
+  includes, and the manifest must tell the truth about this repository
+  (name, stable version, `repository`, `files`, no forced provenance, the
+  reviewed scripts set). The packed artifact is the reviewed candidate;
+  this check is never satisfied by editing the manifest to match.
+- `scripts/smoke-installed.mjs` — packs the tree, installs the tarball into
+  a clean directory on Node 20 and 22, and proves the public surface
+  imports and constructs with no import-time network access.
+- `scripts/verify-token-absence.sh` + `scripts/test-token-absence-real-npm.sh`
+  — the fail-closed npm credential inspection, exercised against the real
+  pinned npm 11.5.1 (a clean environment and the inert setup-node
+  placeholder pass; literal tokens, populated environment references, and
+  failing inspections refuse). The inspection is standalone tooling here:
+  wiring it into `publish.yml` is deliberately NOT done — `publish.yml` is
+  the bound trusted-publishing workflow, and modifying it invalidates the
+  binding proof; any such wiring is a separate, explicitly reviewed change
+  after the proof-publish.
+- pinned, checksum-verified actionlint over the workflows.
+
+CI never dispatches the publish workflow and never publishes.
+
 ## Publishing
 
 Publishing happens only through
