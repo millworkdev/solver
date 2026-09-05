@@ -11,17 +11,25 @@ source contributions.
 
 ## Prepared export
 
-The tree is a prepared export for the next candidate version, derived from
-the published, immutable `@millwork/solver@0.1.0` registry artifact:
+The tree is a prepared export for candidate version `0.1.2`, generated from
+the exact reviewed SDK build:
 
-- documentation comments were sanitized to remove references to files that do
-  not ship in the package;
-- package metadata was corrected — a description matching the implemented
-  behavior, and `repository` pointing at this repository;
-- the version advanced to `0.1.1`, because published versions are immutable
-  and are never republished.
+- the closed export contains exactly 64 JavaScript and declaration files,
+  including `dist/cli.js` and every runtime module it imports;
+- source maps are excluded and map-reference comments are stripped because the
+  private source tree is not published here;
+- documentation comments and user-facing wording are sanitized by the reviewed,
+  deterministic export recipe;
+- `export-manifest.json` binds every emitted file by SHA-256 and records the
+  aggregate digest formula;
+- package metadata exposes `millwork` at `dist/cli.js` and points `repository`
+  at this exact publishing proxy;
+- the version advanced to `0.1.2`; immutable `0.1.0` and `0.1.1` are never
+  republished or altered.
 
-Derivation and review evidence are retained privately. `files: ["dist"]`
+Derivation and review evidence are retained privately.
+[`scripts/check-export-manifest.mjs`](scripts/check-export-manifest.mjs)
+recomputes every file hash and the aggregate digest. `files: ["dist"]`
 keeps repository-only files (this document, `scripts/`, `.github/`) out of
 every packed artifact; npm always includes `package.json`, `README.md`, and
 `LICENSE`.
@@ -35,15 +43,16 @@ runs it on every pull request and push to `main`.
 this repository shares with the sibling MCP publishing repository, also on
 every pull request and push to `main`:
 
+- `scripts/check-export-manifest.mjs` — every `dist/` byte and the exact
+  closed-world file set must match the committed export manifest.
 - `scripts/check-packed-files.mjs` — the packed file set must equal exactly
-  the committed, reviewed `dist/` tree plus the three files npm always
-  includes, and the manifest must tell the truth about this repository
-  (name, stable version, `repository`, `files`, no forced provenance, the
-  reviewed scripts set). The packed artifact is the reviewed candidate;
-  this check is never satisfied by editing the manifest to match.
+  that export plus the three files npm always includes, and the manifest must
+  bind version `0.1.2` and `millwork` to the exported `dist/cli.js`.
 - `scripts/smoke-installed.mjs` — packs the tree, installs the tarball into
-  a clean directory on Node 20 and 22, and proves the public surface
-  imports and constructs with no import-time network access.
+  a clean directory on Node 20 and 22, proves the public module imports, runs
+  the installed `millwork` executable, verifies the exact `0.1.2` package while
+  its supported-public-version fields remain held, and exercises the public
+  docs command without network access.
 - `scripts/verify-token-absence.sh` + `scripts/test-token-absence-real-npm.sh`
   — the fail-closed npm credential inspection, exercised against the real
   pinned npm 11.5.1 (a clean environment and the inert setup-node
