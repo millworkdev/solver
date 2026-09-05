@@ -1,8 +1,8 @@
 /**
  * Wraps GET/POST /v1/api-keys and POST /v1/api-keys/{id}/revoke -- key
- * management for an already-bootstrapped tenant (see ./tenants.js
- * for minting the tenant's first key). Not one of the SDK design's
- * listed namespaces; added for the "tenant bootstrap + API
+ * management for an already-bootstrapped tenant (see the tenant resource
+ * for minting the tenant's first key). Not one of the SDK documentation's
+ * listed namespaces; added for the tenant bootstrap contract's "tenant bootstrap + API
  * key issuance" requirement.
  */
 export class ApiKeysResource {
@@ -38,4 +38,3 @@ export class ApiKeysResource {
         });
     }
 }
-//# sourceMappingURL=apiKeys.js.map

@@ -40,4 +40,3 @@ export class ProposalsResource {
         });
     }
 }
-//# sourceMappingURL=proposals.js.map

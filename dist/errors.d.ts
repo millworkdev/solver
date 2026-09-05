@@ -1,6 +1,6 @@
 /**
- * Wire shape of an RFC-7807 Problem response, per the product contract's
- * error section and the backend's ProblemResponseBody wire shape.
+ * Wire shape of an RFC-7807 Problem response, per the public API contract
+ * Sec8 and the backend problem response's ProblemResponseBody on the backend.
  */
 export interface FieldError {
     field: string;
@@ -18,7 +18,7 @@ export interface ProblemBody {
 /**
  * Thrown for every non-2xx response. Carries the parsed Problem body
  * verbatim -- no string-parsing of `message` is ever required by a caller,
- * per the SDK design's Errors section.
+ * per the SDK documentation's Errors section.
  */
 export declare class SolverApiError extends Error {
     readonly type: string;

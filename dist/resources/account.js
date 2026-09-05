@@ -10,4 +10,3 @@ export class AccountResource {
         return this.http.request({ method: "GET", path: "account" });
     }
 }
-//# sourceMappingURL=account.js.map

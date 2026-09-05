@@ -1,0 +1,269 @@
+{
+  "manifest_id": "millwork.solver.public-export-manifest.v1",
+  "transformation": [
+    "exclude *.map",
+    "strip map-reference comment lines from *.js",
+    "apply the private export recipe's single-line replacement table in order"
+  ],
+  "aggregate_digest_formula": "sha256 over the sorted lines '<sha256>  ./<path relative to dist>\\n' of every exported file",
+  "file_count": 64,
+  "files": [
+    {
+      "path": "dist/cli.d.ts",
+      "sha256": "43e818adf60173644896298637f47b01d5819b17eda46eaa32d0c7d64724d012"
+    },
+    {
+      "path": "dist/cli.js",
+      "sha256": "1f2888b897d624c5c274edff7bcd53f0a39acc431d9de04f77223523bfa99113"
+    },
+    {
+      "path": "dist/cliDiscovery.d.ts",
+      "sha256": "ebe12371a7c5183b5559f822815761d2cfee33b12ea577aa1518cc8589d298e9"
+    },
+    {
+      "path": "dist/cliDiscovery.js",
+      "sha256": "d9a577c49193eb4b8ba5b513b1dbbc9ec965393e0387d865b76db76a36c9a01e"
+    },
+    {
+      "path": "dist/client.d.ts",
+      "sha256": "b9dc07d6647d8a480d45e2f39691fa027883b4d2e868dd92e000401892958787"
+    },
+    {
+      "path": "dist/client.js",
+      "sha256": "04d41db6dbc0a42792aa813a70484ab5393704be60a30e7863985525bcd7d63c"
+    },
+    {
+      "path": "dist/cliInspection.d.ts",
+      "sha256": "1ef84b7ddfbdb237881ce189f26d081c33a9aa7061923e4212bdf856896641f2"
+    },
+    {
+      "path": "dist/cliInspection.js",
+      "sha256": "d5aae73372a44ba67e6f19fda9fb732b3e80209e455c488530834d6e239a12dc"
+    },
+    {
+      "path": "dist/cliQualification.d.ts",
+      "sha256": "610d949b91c2a35474e5d240e95227e8f54aa1a470f2fdac62e8293a63183791"
+    },
+    {
+      "path": "dist/cliQualification.js",
+      "sha256": "7f04fdd06a5944d39de1f607897f9d15ec69351117876baabaf44c518ab555ac"
+    },
+    {
+      "path": "dist/contractGuards.d.ts",
+      "sha256": "21ae4f2fa4be72d177dfe8ce620e4e7c5e479524089e1c798c7c3a6e31ec4db7"
+    },
+    {
+      "path": "dist/contractGuards.js",
+      "sha256": "14a673d15e462f374b5daff85a2daaf4914aa9f0d14aec0f3372c89fc8424a7d"
+    },
+    {
+      "path": "dist/errors.d.ts",
+      "sha256": "3ce2b3208338a821bfd1b3982bc44778d13caf4d359ce84c07b871325cb733c3"
+    },
+    {
+      "path": "dist/errors.js",
+      "sha256": "eea0c46406ec87116002b44677aa9ab07a55e057edff076f9bea36e9ea389c9c"
+    },
+    {
+      "path": "dist/httpClient.d.ts",
+      "sha256": "3ff3ebbadc8799252c946120fb19eaa9d1ce21cbd1d2bdb83a248059ba2cf780"
+    },
+    {
+      "path": "dist/httpClient.js",
+      "sha256": "28fbd6707534884e2615a3b9722321f059dd79bcfb9cdfa2bea9f15410734c7b"
+    },
+    {
+      "path": "dist/index.d.ts",
+      "sha256": "4d9681a41767f0ce1fd54aa7c69d8285fa77368fcf056330ec2bd9e90156ff71"
+    },
+    {
+      "path": "dist/index.js",
+      "sha256": "4de90153b3c3e1a15675541ffc9b430be082eecf29ac0aae7c7bfedcca7fd8c5"
+    },
+    {
+      "path": "dist/pagination.d.ts",
+      "sha256": "a37535cddb4f1c2fa7f1f287f52fcfd2ec5ca7d04c5fbab278a3985f149e670c"
+    },
+    {
+      "path": "dist/pagination.js",
+      "sha256": "5bfa3704031420fa3bd03eec79be83e52a07829124c7b5fbe5f0ad7a3b9a66ee"
+    },
+    {
+      "path": "dist/resources/account.d.ts",
+      "sha256": "9a36e3092ea4e6ff9cfd5c0f16f7e026a94af339a158599de86da3a41b338e30"
+    },
+    {
+      "path": "dist/resources/account.js",
+      "sha256": "c94e4b42428501416cca219cc8b20bf7a8ad43ca0f9dcfecaf609b505e653a7d"
+    },
+    {
+      "path": "dist/resources/apiKeys.d.ts",
+      "sha256": "9e9bb1d9ef55d85283e8dd04f480a47e3a8c4a09a368d234bb4e6a58dbfa4a9e"
+    },
+    {
+      "path": "dist/resources/apiKeys.js",
+      "sha256": "94f86fffa9c5475be5eebfe2678402a28ec067d96c9b0b07d24560425f871d1b"
+    },
+    {
+      "path": "dist/resources/arms.d.ts",
+      "sha256": "6980c47c3481996a0b8dff395194536c6bc3bae689ffeb984fbdfdf8397d8928"
+    },
+    {
+      "path": "dist/resources/arms.js",
+      "sha256": "4ae583df876eea6b596496ad83989fd32276c977985926ce45a7f1031f88b5dd"
+    },
+    {
+      "path": "dist/resources/complianceExports.d.ts",
+      "sha256": "ecdbb8c8514a36afeaafe90fe25071d2c70a59bf7ced1fb88743ca0e2d1c4723"
+    },
+    {
+      "path": "dist/resources/complianceExports.js",
+      "sha256": "f9feef0941cc3db3fdc2a6fb8c297e3005d82264a78195d31583ee21a8f808a2"
+    },
+    {
+      "path": "dist/resources/evalSummary.d.ts",
+      "sha256": "129935ae654b8b1d9caa54511c3f7e6b0ffc5d52adbb0a8bfbe1f732359599f8"
+    },
+    {
+      "path": "dist/resources/evalSummary.js",
+      "sha256": "f7923f7beda09902b0de760b5e2db500e6c7a6eeb295f78c80d6b2af1483bce8"
+    },
+    {
+      "path": "dist/resources/executions.d.ts",
+      "sha256": "3d753b3e9cd8e7efe530ab2efb97971dbc763d7e6ab0b1a45bda5d5e786afc98"
+    },
+    {
+      "path": "dist/resources/executions.js",
+      "sha256": "ebb2faadb6f9a5d167e1cb51777958f13f30cce7b34474960a9a1de74b92795a"
+    },
+    {
+      "path": "dist/resources/modelCatalog.d.ts",
+      "sha256": "1f5ac531763cab74b6727109e33176e108febc52b63ed3c1ceb45b9488c52708"
+    },
+    {
+      "path": "dist/resources/modelCatalog.js",
+      "sha256": "bb71306bd9187b4d75d60533d0e1eabae099fc9f6010aa5f5717cef5e01fbcad"
+    },
+    {
+      "path": "dist/resources/modelDeployments.d.ts",
+      "sha256": "b8ba5d39a8035cefbf1f33ab8a64bda5c400215330008b199112b32167b9a529"
+    },
+    {
+      "path": "dist/resources/modelDeployments.js",
+      "sha256": "ab3afc794799d22f49e028c9aa8eaa10557b50b37e5fc251a18706951d83a561"
+    },
+    {
+      "path": "dist/resources/modelSourceProfiles.d.ts",
+      "sha256": "dc2f33f68dd4e8544c27222e2f4cec84a6ace6b08624c208bb20802ca21eab2a"
+    },
+    {
+      "path": "dist/resources/modelSourceProfiles.js",
+      "sha256": "cf0a49023c546ce210f51f6fa1941ae7ecc6a82c7a2b75c3e25045288d8d979a"
+    },
+    {
+      "path": "dist/resources/proposals.d.ts",
+      "sha256": "4191c010882e478bc741807eda71612600bd8a94dd196a83de66018fcd1ea9d2"
+    },
+    {
+      "path": "dist/resources/proposals.js",
+      "sha256": "859ac48f33cbd7e119fac961be7f522838bff1649033f29cfb5e3d0d2ebfde0f"
+    },
+    {
+      "path": "dist/resources/receipts.d.ts",
+      "sha256": "43d614775fef6304b7bda8474dd83401ace387f9e6b4e0ab630c995fab50b376"
+    },
+    {
+      "path": "dist/resources/receipts.js",
+      "sha256": "0256e6820d6fa029fef11afb962dd9077aa2a08aa7d8f622512d9519be0c1a6b"
+    },
+    {
+      "path": "dist/resources/sourceConnections.d.ts",
+      "sha256": "86de3832aaa6c7974b7b40fa9d238984512d2c0265813ff15aeed13957eac242"
+    },
+    {
+      "path": "dist/resources/sourceConnections.js",
+      "sha256": "59fc91fd232f2eeaf2465fac23ce113806a55d26c12bdaf17b2d2f21d7abb028"
+    },
+    {
+      "path": "dist/resources/sourceCredentialHandoffs.d.ts",
+      "sha256": "510342690b731d6b9d2a55d510eab4f7a2fe76b90f4f0859fc9e329ddfc495e8"
+    },
+    {
+      "path": "dist/resources/sourceCredentialHandoffs.js",
+      "sha256": "5e3aeed253e941e723ffbc3ac67af6a1a79335275bffd3c0e23024cf925fd387"
+    },
+    {
+      "path": "dist/resources/tenants.d.ts",
+      "sha256": "fcc060dd62b8e56ac4849fb7043ac718086790c8b94a8ed0eb8cb6ec6b811e8d"
+    },
+    {
+      "path": "dist/resources/tenants.js",
+      "sha256": "5308b2f6a83e74d8a23151f9a931f3f17b092af20eab0efc7616a7e30b1038e7"
+    },
+    {
+      "path": "dist/resources/tenantTemplates.d.ts",
+      "sha256": "58305a231f64240955eea6615febcbaf74f4245f7c64b986fedcd8d7cc659ad6"
+    },
+    {
+      "path": "dist/resources/tenantTemplates.js",
+      "sha256": "989b6123b38ec9614688c8e05fe9a49ed032b6b88d15a7e6c6b99b0c13224ee8"
+    },
+    {
+      "path": "dist/resources/usage.d.ts",
+      "sha256": "686618934d9eea7e797b56881725af5d2c98eeb94a497ad5e5b59f2c97a6ab05"
+    },
+    {
+      "path": "dist/resources/usage.js",
+      "sha256": "8e88c9505a8d2b5faa55e3d6bee99d3d0841bf60a26419c6cad7eee0c4cdcada"
+    },
+    {
+      "path": "dist/resources/verifiers.d.ts",
+      "sha256": "2d179c3189bf48e8ed5f85594686c5d6e1e9040bcfc95af6d5fd9e5e57bf0668"
+    },
+    {
+      "path": "dist/resources/verifiers.js",
+      "sha256": "81d691f394f14afb95b41c9639dbc6d2db06c627185be970b314e499f6ff09a4"
+    },
+    {
+      "path": "dist/starterScaffold.d.ts",
+      "sha256": "8b1ef37282870165d2161e6026ca545c8d51367c65943b6b75c6696cdf359ec0"
+    },
+    {
+      "path": "dist/starterScaffold.js",
+      "sha256": "5d697c493ca759895db20527e356d15b9fd81da9dbfd9ed57dadd80df43069b8"
+    },
+    {
+      "path": "dist/tenantConsentBrowser.d.ts",
+      "sha256": "112dc4d37a7bc335f751cab6aa679a7db2d872d0f792feace40377e3c2903ea3"
+    },
+    {
+      "path": "dist/tenantConsentBrowser.js",
+      "sha256": "9bc7d71579f6ea7aad9af82f89f9db6462f89eabb47a2c3a5bb204aca41a1c99"
+    },
+    {
+      "path": "dist/tenantStartFlow.d.ts",
+      "sha256": "2cf427fdd9c9264a15373f094ef5046a42460e354b20ffdbb7b16d0eca52c7fc"
+    },
+    {
+      "path": "dist/tenantStartFlow.js",
+      "sha256": "6055e889c7fae5a1b214fe3977fc3c7194646472462176fe679b7f27f89be0d2"
+    },
+    {
+      "path": "dist/tenantStartOutput.d.ts",
+      "sha256": "f64ca9fe3b679bc3f8a217cf165f92a4b31b068e2a4e421fe5d0631c6881f231"
+    },
+    {
+      "path": "dist/tenantStartOutput.js",
+      "sha256": "ed07564760b69984a9ab25ac0671361590480a582fd370ee652735e9f10419dd"
+    },
+    {
+      "path": "dist/types.d.ts",
+      "sha256": "b8f5241ef365e1c98ba72482d15a7c3dc5598e7a75f58d5e25098e26d3b8fad6"
+    },
+    {
+      "path": "dist/types.js",
+      "sha256": "c29d3594690c781e06590537a3dc7852b31e54b19a7f3deb585a1b381a89afb4"
+    }
+  ],
+  "aggregate_sha256": "762d937ec26317df9c6323289cb0a24d6f7dea9039b969b20081277d708fe479"
+}

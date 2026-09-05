@@ -13,7 +13,7 @@ function isRetryableStatus(status) {
     return status >= 500;
 }
 /**
- * The safe-transport security invariant. An automatic retry is only safe when
+ * Security invariant 6 (the retry boundary). An automatic retry is only safe when
  * replaying the request cannot apply the work twice:
  *
  *   * a safe read applies nothing, so it may always retry;
@@ -40,7 +40,7 @@ export function requestRetryBoundary(request) {
  * Thin fetch-based HTTP client: auth header, JSON encode/decode, typed
  * SolverApiError on any non-2xx, and automatic retry of network errors and 5xx
  * ONLY inside the safe-transport boundary (never a 4xx, never an unkeyed
- * mutation -- see requestRetryBoundary). Per the SDK design's "thin client,
+ * mutation -- see requestRetryBoundary). Per the SDK documentation's "thin client,
  * no hidden logic" rule -- no ranking/policy/caching behavior lives here.
  */
 export class HttpClient {
@@ -119,4 +119,3 @@ export class HttpClient {
         return new SolverApiError(body);
     }
 }
-//# sourceMappingURL=httpClient.js.map

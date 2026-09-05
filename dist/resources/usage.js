@@ -12,4 +12,3 @@ export class UsageResource {
         });
     }
 }
-//# sourceMappingURL=usage.js.map

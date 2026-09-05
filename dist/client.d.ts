@@ -14,16 +14,17 @@ import { SourceCredentialHandoffsResource } from "./resources/sourceCredentialHa
 import { UsageResource } from "./resources/usage.js";
 import { ComplianceExportsResource } from "./resources/complianceExports.js";
 import { VerifiersResource } from "./resources/verifiers.js";
+import { TenantTemplatesResource } from "./resources/tenantTemplates.js";
 /**
  * `new Solver({ apiKey, baseUrl, maxRetries, retryBackoffMs })`, per
- * the SDK design's "Client construction". One namespace per core
+ * the SDK documentation's "Client construction". One namespace per core
  * object. Every resource is a thin wrapper over its live v1 endpoint; no
  * ranking, caching, or policy behavior runs on the client.
  *
  * The model-access chain reads left to right:
  * `modelSourceProfiles` (what can be connected) ->
  * `sourceCredentialHandoffs` (browser handoff; no secret ever transits the
- * SDK) -> `sourceConnections` (your provider-key binding) -> `modelDeployments`
+ * SDK) -> `sourceConnections` (the customer-owned binding) -> `modelDeployments`
  * (certification-backed supply) -> `modelCatalog` (usable intersection) ->
  * `arms.create({ model_deployment_id })` -> `executions` -> `receipts`.
  */
@@ -43,5 +44,6 @@ export declare class Solver {
     readonly modelCatalog: ModelCatalogResource;
     readonly account: AccountResource;
     readonly evalSummary: EvalSummaryResource;
+    readonly tenantTemplates: TenantTemplatesResource;
     constructor(options: SolverClientOptions);
 }
