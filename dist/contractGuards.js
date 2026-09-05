@@ -24,4 +24,3 @@ export const CONTRACT_GUARDS_OK = _armStatusMatchesContract &&
     _connectionTestStateMatchesContract &&
     _handoffStateMatchesContract &&
     _sourceKindMatchesContract;
-//# sourceMappingURL=contractGuards.js.map

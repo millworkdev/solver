@@ -23,4 +23,3 @@ export class ModelDeploymentsResource {
         });
     }
 }
-//# sourceMappingURL=modelDeployments.js.map

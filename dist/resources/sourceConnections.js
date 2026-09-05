@@ -1,5 +1,5 @@
 /**
- * Your-provider-key source connections (`/v1/source-connections`). Creation consumes a
+ * customer-owned source connections (`/v1/source-connections`). Creation consumes a
  * COMPLETED browser handoff intent (`sourceCredentialHandoffs`) -- no method
  * on this resource accepts credential material, and `auth_binding_ref` in
  * responses is an opaque broker handle, never a secret.
@@ -67,4 +67,3 @@ export class SourceConnectionsResource {
         return response.deployments;
     }
 }
-//# sourceMappingURL=sourceConnections.js.map

@@ -1,6 +1,6 @@
 import type { HttpClient } from "../httpClient.js";
 import type { Arm, ArmListFilter, ArmRegistrationOutcome, ArmWrite, Paginated } from "../types.js";
-/** Wraps GET/POST/PATCH/DELETE /v1/arms, per the SDK design's resource namespaces. */
+/** Wraps GET/POST/PATCH/DELETE /v1/arms, per the SDK documentation's resource namespaces. */
 export declare class ArmsResource {
     private readonly http;
     constructor(http: HttpClient);

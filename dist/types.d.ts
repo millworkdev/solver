@@ -1,7 +1,7 @@
 /**
- * Wire types for the live Millwork Solver resources. Field names match the backend's wire casing
- * (snake_case), per the backend's arm route contract and
- * its verifier route contract.
+ * Wire types for the live Millwork API resources. Field names match the backend's wire casing
+ * (snake_case), per the arm API contract and
+ * the verifier API contract.
  */
 export type ArmKind = "model" | "agent" | "skill";
 export type ArmStatus = "ready" | "degraded" | "disabled";
@@ -102,7 +102,7 @@ export interface Tenant {
 }
 /**
  * `{ items, nextCursor }` with `.next()` -- never auto-fetches all pages,
- * per the SDK design's "no hidden logic" rule. `.next()` is attached by
+ * per the SDK documentation's "no hidden logic" rule. `.next()` is attached by
  * the resource method that produces the page, since it needs to know how to
  * re-issue the request with the next cursor.
  */
@@ -112,7 +112,7 @@ export interface Paginated<T> {
     next(): Promise<Paginated<T>>;
 }
 /**
- * The execution lifecycle states, per the product contract.
+ * the public API contract's lifecycle states (Sec4).
  */
 export type LifecycleState = "accepted" | "queued" | "running" | "progress" | "completed" | "failed" | "cancelled" | "expired";
 interface ExecutionRequestBase {
@@ -136,18 +136,137 @@ interface ExecutionRequestBase {
     compose?: "auto";
 }
 /**
- * The live shape remains source-compatible with the original SDK contract:
- * callers omit `mode` (or set it to `live`) and supply their verifier.
+ * Live callers may supply a tenant verifier or omit `verifier_id` to select
+ * Millwork API's built-in output-presence baseline (not semantic verification).
  * Echo is the existing platform-proof wire mode: it requires `mode: "echo"`
  * and the API rejects a caller-supplied verifier for that mode.
  */
 export type ExecutionRequest = (ExecutionRequestBase & {
     mode?: "live";
-    verifier_id: string;
+    verifier_id?: string;
+    routing?: {
+        required_arm_id: string;
+    };
 }) | (ExecutionRequestBase & {
     mode: "echo";
     verifier_id?: never;
+    routing?: {
+        required_arm_id: string;
+    };
 });
+export type TenantTemplateId = "starter" | "pooled-open-model" | "byok-open-model";
+export interface TenantTemplatePlan {
+    template_id: TenantTemplateId;
+    template_version: string;
+    request_preset_id: string;
+    issued_at: string;
+    expires_at: string;
+    digest: string;
+    qualification: {
+        state: string;
+        next_action: {
+            type: string;
+            detail: string;
+        };
+    };
+    access_lane: "diagnostic" | "millwork_pool" | "byok";
+    catalog_row: ModelCatalogEntry | null;
+    byok_source: {
+        source_id: string;
+        auth_scheme: string;
+        model_key: string;
+        served_variant_id: string;
+        certification_id: string;
+    } | null;
+    blockers: Array<{
+        code: string;
+        detail: string;
+        next_action: {
+            type: string;
+            detail: string;
+        };
+    }>;
+    alternative_plans: Array<{
+        template_id: "byok-open-model";
+        template_version: string;
+        access_lane: "byok";
+        application_supported: boolean;
+        next_action: {
+            type: string;
+            detail: string;
+        };
+    }>;
+    request_policy: {
+        mode: "echo" | "live";
+        data_classes: DataClass[];
+        budget: {
+            max_cost_usd: number;
+            max_runtime_s: number;
+        };
+        fallback_policy: "none";
+        verifier: "platform.echo" | "platform.output_presence";
+    } | null;
+    starter_credit: {
+        balance_usd: number;
+        funded_state: "funded" | "sandbox";
+        covers_maximum_spend: boolean;
+    };
+    maximum_spend_usd: number;
+    effects?: Array<{
+        id: string;
+        description: string;
+    }>;
+    file_manifest: Array<{
+        path: string;
+        kind: string;
+    }>;
+    [extra: string]: unknown;
+}
+export interface TenantTemplateApplication {
+    application_id: string;
+    template_id: TenantTemplateId;
+    template_version: string;
+    /** Approved snapshot preset; absent on older servers, null for legacy rows. */
+    request_preset_id?: string | null;
+    state: "planned" | "applying" | "consent_pending" | "arm_ready" | "echo_proved" | "live_queued" | "live_running" | "ready" | "action_required" | "failed_safe";
+    completed_effects: Array<{
+        id: string;
+        at: string;
+    }>;
+    result: {
+        execution_id: string;
+        href: string;
+        model_provenance: ModelAttemptProvenance;
+    } | null;
+    receipt: {
+        receipt_id: string;
+        href: string;
+    } | null;
+    managed_arm_id: string | null;
+    echo_execution_id: string | null;
+    echo_receipt_id: string | null;
+    live_execution_id: string | null;
+    selected_model_deployment_id: string | null;
+    source_connection_id: string | null;
+    consent: {
+        handoff_intent_id: string;
+        continue_url: string;
+        expires_at: string;
+        attempt: number;
+    } | null;
+    live_proof: {
+        digest: string;
+        issued_at: string;
+        expires_at: string;
+    } | null;
+    next_action: {
+        type: string;
+        detail: string;
+    };
+    diagnostics: Record<string, unknown>;
+    created_at: string;
+    [extra: string]: unknown;
+}
 export interface Execution {
     execution_id: string;
     status: LifecycleState;
@@ -342,7 +461,7 @@ export interface CustomerVisibleSourceProfile {
         https_required: boolean;
         redirects_allowed: boolean;
     };
-    /** The listing covers only your-provider-key sources, so the triple is constant. */
+    /** The listing is customer-owned-only by construction, so the triple is constant. */
     access_lane: "byok";
     credential_owner: "customer";
     commercial_owner: "customer";
@@ -532,7 +651,7 @@ export interface ExecutionResult {
     retention_expires_at: string | null;
 }
 export type VerifierProbeReasonCode = "scheme_rejected" | "dns_resolution_failed" | "private_range_rejected" | "probe_timeout" | "endpoint_unreachable" | "authentication_failed";
-/** The product contract's VerifierResult wire shape. */
+/** the public API contract §2.2 VerifierResult. */
 export interface VerifierResult {
     is_correct: boolean;
     quality_score: number;

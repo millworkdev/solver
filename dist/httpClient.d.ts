@@ -21,12 +21,12 @@ export interface RequestOptions {
 }
 /**
  * Which side of the safe-transport boundary a request sits on.
- * Mirrors the MCP transport's vocabulary so the two client surfaces describe
+ * Mirrors the MCP transport's vocabulary (the transport boundary) so the two surfaces describe
  * one invariant in one language rather than two dialects of it.
  */
 export type RequestRetryBoundary = "safe_read" | "same_key_mutation" | "single_attempt_mutation";
 /**
- * The safe-transport security invariant. An automatic retry is only safe when
+ * Security invariant 6 (the retry boundary). An automatic retry is only safe when
  * replaying the request cannot apply the work twice:
  *
  *   * a safe read applies nothing, so it may always retry;
@@ -46,7 +46,7 @@ export declare function requestRetryBoundary(request: Pick<RequestOptions, "meth
  * Thin fetch-based HTTP client: auth header, JSON encode/decode, typed
  * SolverApiError on any non-2xx, and automatic retry of network errors and 5xx
  * ONLY inside the safe-transport boundary (never a 4xx, never an unkeyed
- * mutation -- see requestRetryBoundary). Per the SDK design's "thin client,
+ * mutation -- see requestRetryBoundary). Per the SDK documentation's "thin client,
  * no hidden logic" rule -- no ranking/policy/caching behavior lives here.
  */
 export declare class HttpClient {

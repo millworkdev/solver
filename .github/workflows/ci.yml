@@ -34,6 +34,9 @@ jobs:
       - name: Exercise the content-check negatives
         run: node scripts/test-check-public-content.mjs
 
+      - name: Verify the export manifest against the actual dist bytes
+        run: node scripts/check-export-manifest.mjs
+
       - name: Lint workflows with pinned actionlint
         run: |
           set -euo pipefail
@@ -64,7 +67,7 @@ jobs:
       - name: Check the packed file set and manifest truth
         run: node scripts/check-packed-files.mjs
 
-      - name: Smoke-test the installed artifact (clean install, public surface)
+      - name: Smoke-test the installed artifact (module and millwork binary)
         run: node scripts/smoke-installed.mjs
 
   credential-boundary:

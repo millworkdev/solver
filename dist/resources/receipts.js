@@ -26,4 +26,3 @@ export class ReceiptsResource {
         return toPaginated(response.receipts, null, async () => this.list(filter));
     }
 }
-//# sourceMappingURL=receipts.js.map

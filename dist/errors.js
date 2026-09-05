@@ -1,7 +1,7 @@
 /**
  * Thrown for every non-2xx response. Carries the parsed Problem body
  * verbatim -- no string-parsing of `message` is ever required by a caller,
- * per the SDK design's Errors section.
+ * per the SDK documentation's Errors section.
  */
 export class SolverApiError extends Error {
     type;
@@ -35,4 +35,3 @@ export class SolverApiNetworkError extends Error {
         this.cause = cause;
     }
 }
-//# sourceMappingURL=errors.js.map

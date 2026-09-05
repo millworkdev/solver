@@ -25,4 +25,3 @@ export class SourceCredentialHandoffsResource {
         });
     }
 }
-//# sourceMappingURL=sourceCredentialHandoffs.js.map

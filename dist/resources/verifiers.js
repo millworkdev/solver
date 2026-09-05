@@ -1,5 +1,5 @@
 import { toPaginated } from "../pagination.js";
-/** Wraps GET/POST /v1/verifiers, per the SDK design's resource namespaces. */
+/** Wraps GET/POST /v1/verifiers, per the SDK documentation's resource namespaces. */
 export class VerifiersResource {
     http;
     constructor(http) {
@@ -53,4 +53,3 @@ export class VerifiersResource {
         });
     }
 }
-//# sourceMappingURL=verifiers.js.map

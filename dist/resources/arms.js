@@ -1,5 +1,5 @@
 import { toPaginated } from "../pagination.js";
-/** Wraps GET/POST/PATCH/DELETE /v1/arms, per the SDK design's resource namespaces. */
+/** Wraps GET/POST/PATCH/DELETE /v1/arms, per the SDK documentation's resource namespaces. */
 export class ArmsResource {
     http;
     constructor(http) {
@@ -42,4 +42,3 @@ export class ArmsResource {
         });
     }
 }
-//# sourceMappingURL=arms.js.map

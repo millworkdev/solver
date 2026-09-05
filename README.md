@@ -12,6 +12,20 @@ npm install @millwork/solver
 version for reproducible installs. Pre-promotion versions are published under
 the `candidate` dist-tag and are never installed by default.
 
+## CLI
+
+The candidate release includes the `millwork` executable. Pin the candidate
+version explicitly while `latest` remains on the bootstrap release:
+
+```bash
+npx --yes -p @millwork/solver@0.1.2 millwork --version
+npx --yes -p @millwork/solver@0.1.2 millwork docs
+```
+
+`millwork doctor` checks the local Node, API base, and API-key configuration
+without printing the credential. `millwork tenant start` inspects a plan before
+any application or paid execution is approved.
+
 ## Smallest working example
 
 ```ts
