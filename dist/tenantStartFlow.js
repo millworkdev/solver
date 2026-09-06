@@ -59,9 +59,12 @@ export async function progressTenantStart(templates, initial, options) {
     const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     let refreshed = false;
     let approved = false;
+    let retriedConsent = false;
     let displayedConsent;
     let observedExpiredConsent = false;
-    const maxPolls = options.maxPolls ?? 60;
+    // Allow the provider's ten-minute approval window, not an earlier two-minute
+    // terminal timeout. Expiry still belongs to the server and never auto-retries.
+    const maxPolls = options.maxPolls ?? 300;
     if (!Number.isSafeInteger(maxPolls) || maxPolls < 0 || maxPolls > 300) {
         throw new Error("Progress polling must be bounded to 0–300 attempts.");
     }
@@ -76,6 +79,29 @@ export async function progressTenantStart(templates, initial, options) {
         const byok = application.template_id === "byok-open-model";
         const expired = application.live_proof
             && !(Date.parse(application.live_proof.expires_at) > Date.now());
+        if (options.interactive && byok && !retriedConsent && !application.live_execution_id
+            && application.state === "action_required" && application.next_action.type === "retry_consent"
+            && poll < maxPolls && options.approveConsentRetry) {
+            retriedConsent = true;
+            if (!await options.approveConsentRetry(application))
+                return application;
+            // Explicit human approval creates one fresh consent on the SAME saved
+            // application. It is not permission to retry an exchange or a paid run.
+            try {
+                application = await templates.resume(application.application_id, { action: "retry_consent" }, { idempotencyKey: randomUUID() });
+            }
+            catch (error) {
+                if (!(error instanceof SolverApiError) || error.status !== 409
+                    || !isInvalidStateProblem(error.type))
+                    throw error;
+                const recovered = await templates.get(application.application_id);
+                if (recovered.state === "action_required" && recovered.next_action.type === "retry_consent")
+                    throw error;
+                application = recovered;
+            }
+            observedExpiredConsent = false;
+            continue;
+        }
         if (options.interactive && byok && !application.live_execution_id && application.state === "consent_pending") {
             if (poll === maxPolls || observedExpiredConsent)
                 return application;

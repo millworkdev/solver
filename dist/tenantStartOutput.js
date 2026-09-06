@@ -29,7 +29,7 @@ export async function readCreditSummary(read) {
 export function applicationSummary(application, extras) {
     const ready = application.state === "ready" && application.result && application.receipt && extras.output && extras.execution_receipt;
     const echoOnly = application.template_id === "starter";
-    const echoReady = echoOnly && application.state === "ready" && application.receipt;
+    const echoReady = echoOnly && ["echo_proved", "ready"].includes(application.state) && application.receipt;
     const pending = ["applying", "live_queued", "live_running"].includes(application.state);
     const lines = [echoReady ? "Echo starter complete — no live model run."
             : ready ? "First live result ready."

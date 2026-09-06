@@ -81,6 +81,7 @@ async function finishApplication(solver, initial) {
     const application = await progressTenantStart(solver.tenantTemplates, initial, {
         interactive,
         presentConsent: consent.presentConsent,
+        approveConsentRetry: async () => confirm("Provider connection did not complete. Open a fresh approval for this saved setup? No paid run starts. [y/N] "),
         progress: (current) => {
             consent.progress(current);
             const marker = `${current.state}:${current.next_action.type}`;
@@ -114,6 +115,11 @@ async function finishApplication(solver, initial) {
         process.stdout.write(applicationSummary(application, extras));
     else
         emitJson({ ...application, ...extras });
+    // Retaining a failed execution is not successful onboarding. Keep the
+    // recovery document, but let scripts detect the terminal failure too.
+    if (application.state === "failed_safe"
+        || (application.state === "action_required" && application.next_action.type === "retry_consent"))
+        process.exitCode = 1;
 }
 async function main() {
     const args = cliArgs;
