@@ -29,7 +29,7 @@ if (JSON.stringify(packedFiles) !== JSON.stringify(allowedPackedFiles)) {
 
 const manifest = JSON.parse(readFileSync(resolve(repositoryRoot, "package.json"), "utf8"));
 if (manifest.name !== "@millwork/solver") failures.push(`manifest name is ${manifest.name}`);
-if (manifest.version !== "0.1.2") failures.push(`manifest version must be 0.1.2, got ${manifest.version}`);
+if (manifest.version !== "0.1.3") failures.push(`manifest version must be 0.1.3, got ${manifest.version}`);
 if (manifest.repository?.url !== "git+https://github.com/millworkdev/solver.git") {
   failures.push(`manifest repository does not name this exact public repository: ${manifest.repository?.url}`);
 }

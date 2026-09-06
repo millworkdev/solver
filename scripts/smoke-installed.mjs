@@ -1,5 +1,5 @@
 // Exercise the packed artifact exactly as a user receives it: clean install,
-// module import, and the installed millwork binary with held-candidate truth.
+// module import, and the installed millwork binary's exact artifact identity.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -45,10 +45,10 @@ try {
   });
   if (version.status !== 0 || version.stderr !== "") fail(`installed binary failed: ${version.stderr}`);
   const versionRecord = JSON.parse(version.stdout);
-  if (versionRecord.package_version !== "0.1.2"
-    || versionRecord.supported_public_version !== null
-    || versionRecord.public_cli_available !== false) {
-    fail(`installed binary escaped the pre-promotion hold: ${version.stdout}`);
+  if (versionRecord.schema_version !== 2 || versionRecord.package_version !== "0.1.3"
+    || Object.hasOwn(versionRecord, "supported_public_version")
+    || Object.hasOwn(versionRecord, "public_cli_available")) {
+    fail(`installed binary identity is invalid: ${version.stdout}`);
   }
 
   const docs = spawnSync(binaryPath, ["docs", "--json"], {
@@ -61,8 +61,11 @@ try {
   if (!String(docsRecord.url).startsWith("https://docs.getmillwork.dev/")) {
     fail("installed docs command returned an unexpected URL");
   }
+  if (versionRecord.support_information_url !== docsRecord.url) {
+    fail("installed version and docs commands disagree on the support information URL");
+  }
 
-  process.stdout.write("installed smoke ok (module import, millwork binary, held candidate truth, docs)\n");
+  process.stdout.write("installed smoke ok (module import, millwork binary, exact version, docs)\n");
 } catch (error) {
   fail(error.message);
 } finally {

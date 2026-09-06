@@ -18,13 +18,32 @@ The candidate release includes the `millwork` executable. Pin the candidate
 version explicitly while `latest` remains on the bootstrap release:
 
 ```bash
-npx --yes -p @millwork/solver@0.1.2 millwork --version
-npx --yes -p @millwork/solver@0.1.2 millwork docs
+npx --yes @millwork/solver@0.1.3 tenant start
 ```
 
 `millwork doctor` checks the local Node, API base, and API-key configuration
 without printing the credential. `millwork tenant start` inspects a plan before
 any application or paid execution is approved.
+
+Set `SOLVERAPI_API_KEY` to your organization's Millwork API key before starting;
+do not put the key in command-line arguments. The hosted path supplies provider
+access. To connect your own provider account, add `--template byok-open-model`:
+the command opens your browser and waits for approval, then continues in the
+same terminal. You never paste a provider key or authorization code there.
+
+If approval fails or expires, the interactive command offers one explicit fresh
+approval on the same saved setup. Declining makes no new connection or paid
+request. JSON and headless output never prompts or retries consent implicitly.
+The command prints its recovery command and retains a completed result/receipt;
+recovery does not repeat that paid run. Current access and release guidance is
+available through `millwork docs`.
+
+`--version` reports the installed version, not the registry's current tags.
+Its JSON report and `doctor` link to current support information instead of
+embedding a public-availability claim that could become stale. These two reports
+use schema version 2: `support_information_url` replaces the old
+`supported_public_version` and `public_cli_available` fields. The `docs` report
+and tenant-setup output keep their existing schemas.
 
 ## Smallest working example
 
@@ -32,7 +51,7 @@ any application or paid execution is approved.
 import { Solver, SolverApiError } from "@millwork/solver";
 
 const solver = new Solver({
-  apiKey: process.env.SOLVER_API_KEY!,
+  apiKey: process.env.SOLVERAPI_API_KEY!,
   baseUrl: "https://api.getmillwork.dev/v1",
 });
 
@@ -52,8 +71,8 @@ section below.
   `usage` wrap the live backend routes when you supply a key and base URL.
 - `executions.events()` polls with `after=<event_id>` and stops after a
   terminal execution lifecycle event. It does not invent a socket transport.
-- External arm dispatch remains a backend limitation. A ranked `running` arm is
-  not proof that a provider was invoked.
+- Eligible live routes invoke the selected ready arm. Check the terminal result
+  and receipt: a `running` status alone is not proof that a provider answered.
 
 ## Compatibility
 
