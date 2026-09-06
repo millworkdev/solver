@@ -38,12 +38,11 @@ export function buildDoctorReport(environment, nodeVersion = process.versions.no
     const credentialConfigured = Boolean(environment.SOLVERAPI_API_KEY?.trim());
     const localConfigurationReady = runtimeSupported && apiBase.valid && credentialConfigured;
     return {
-        schema_version: 1,
+        schema_version: 2,
         command: "millwork doctor",
         package: {
             version: packageVersion(),
-            supported_public_version: null,
-            public_cli_available: false,
+            support_information_url: TENANT_START_DOCS_URL,
         },
         runtime: {
             node_version: nodeVersion,
@@ -67,7 +66,7 @@ export function buildDoctorReport(environment, nodeVersion = process.versions.no
                 ? "Set SOLVERAPI_BASE_URL to an HTTPS URL or a loopback HTTP URL without credentials or query parameters."
                 : !credentialConfigured
                     ? "Create your organization API key in the dashboard, then set SOLVERAPI_API_KEY without printing it."
-                    : "Read the onramp before planning. Public registry installation remains unavailable until an exact supported version is published.",
+                    : "Run millwork tenant start to review your setup and continue. No paid run starts without authorization.",
     };
 }
 export function resolveDiscoveryCommand(args, environment = process.env, nodeVersion = process.versions.node) {
@@ -98,15 +97,16 @@ export function resolveDiscoveryCommand(args, environment = process.env, nodeVer
             return usageError("millwork --version [--json]");
         const version = packageVersion();
         const value = {
-            schema_version: 1,
+            schema_version: 2,
             package_version: version,
-            supported_public_version: null,
-            public_cli_available: false,
+            support_information_url: TENANT_START_DOCS_URL,
         };
         return {
             exitCode: 0,
             stream: "stdout",
-            text: json ? JSON.stringify(value, null, 2) : `${version} (local candidate; no supported public CLI version)`,
+            // An immutable installed binary knows its own version, not the registry's
+            // current tags or support policy. Release claims belong to reviewed docs.
+            text: json ? JSON.stringify(value, null, 2) : version,
         };
     }
     return null;

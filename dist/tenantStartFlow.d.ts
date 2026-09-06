@@ -7,6 +7,7 @@ export interface TenantStartProgressOptions {
     approveLive: (application: TenantTemplateApplication) => Promise<boolean>;
     progress: (application: TenantTemplateApplication) => void;
     presentConsent?: (application: TenantTemplateApplication, continueUrl: string) => unknown | Promise<unknown>;
+    approveConsentRetry?: (application: TenantTemplateApplication) => Promise<boolean>;
     sleep?: (ms: number) => Promise<void>;
     maxPolls?: number;
 }
