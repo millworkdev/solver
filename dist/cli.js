@@ -98,6 +98,15 @@ async function finishApplication(solver, initial) {
         },
     });
     const extras = { ...(writtenFiles ? { files: writtenFiles } : {}) };
+    let selection;
+    if (application.state === "ready" && application.managed_arm_id
+        && application.selected_model_deployment_id) {
+        selection = await solver.tenantTemplates.select(application.application_id, {
+            idempotencyKey: `tenant-model-select:${application.application_id}`,
+        });
+        if (interactive)
+            process.stderr.write(`Current model: ${terminalText(selection.managed_arm_id)}\n`);
+    }
     if (application.state === "ready" && application.result && application.receipt) {
         const result = await solver.executions.result(application.result.execution_id);
         const receipt = await solver.receipts.get(application.receipt.receipt_id);
@@ -114,11 +123,242 @@ async function finishApplication(solver, initial) {
     if (interactive)
         process.stdout.write(applicationSummary(application, extras));
     else
-        emitJson({ ...application, ...extras });
+        emitJson({ ...application, ...extras, ...(selection ? { selection } : {}) });
     // Retaining a failed execution is not successful onboarding. Keep the
     // recovery document, but let scripts detect the terminal failure too.
     if (application.state === "failed_safe"
         || (application.state === "action_required" && application.next_action.type === "retry_consent"))
+        process.exitCode = 1;
+    return application;
+}
+function assertCommandFlags(args, start, booleans, values, allowPositionals = false) {
+    for (let index = start; index < args.length; index += 1) {
+        const argument = args[index];
+        if (booleans.has(argument))
+            continue;
+        if (values.has(argument)) {
+            if (!args[index + 1] || args[index + 1].startsWith("--")) {
+                throw new InspectionUsageError(`${argument} requires a value`);
+            }
+            index += 1;
+            continue;
+        }
+        if (!argument.startsWith("--")) {
+            if (allowPositionals)
+                continue;
+            throw new InspectionUsageError(`unexpected argument: ${terminalText(argument)}`);
+        }
+        throw new InspectionUsageError(`unknown argument: ${terminalText(argument)}`);
+    }
+}
+function resolveCatalogModel(rows, requested, deploymentId) {
+    const candidates = rows.filter((row) => deploymentId
+        ? row.deployment.model_deployment_id === deploymentId
+        : row.model.model_key === requested || row.deployment.model_deployment_id === requested);
+    if (candidates.length === 0)
+        throw new InspectionUsageError(`No usable certified catalog model matches ${terminalText(deploymentId ?? requested)}. Run millwork models list.`);
+    if (candidates.length > 1) {
+        const choices = candidates.map((row) => `${row.deployment.model_deployment_id} (${row.connection.access_lane})`).join(", ");
+        throw new InspectionUsageError(`That model has multiple usable routes. Re-run with --model-deployment-id: ${terminalText(choices)}`);
+    }
+    return candidates[0];
+}
+async function runPlannedModelApplication(solver, input) {
+    const recovered = await solver.tenantTemplates.recover({
+        template_id: input.templateId,
+        idempotency_key: input.applicationKey,
+    });
+    if (recovered.application) {
+        if (input.modelDeploymentId
+            && recovered.application.selected_model_deployment_id !== input.modelDeploymentId) {
+            throw new InspectionUsageError("The saved application belongs to a different deployment. Use a different --idempotency-key.");
+        }
+        await finishApplication(solver, recovered.application);
+        return;
+    }
+    if (!interactive) {
+        emitJson({ state: "action_required", next_action: {
+                type: "interactive_approval_required",
+                detail: "Run this command in an interactive terminal to review the exact plan and authorize any browser consent or bounded live proof.",
+            } });
+        process.exit(2);
+    }
+    const plan = await solver.tenantTemplates.plan({
+        template_id: input.templateId,
+        ...(input.modelDeploymentId ? { model_deployment_id: input.modelDeploymentId } : {}),
+    });
+    const blocked = qualificationFromPlan(plan);
+    if (blocked)
+        emitQualification(blocked);
+    process.stderr.write(`Plan digest ${terminalText(plan.digest)}\nLane ${terminalText(plan.access_lane)}\nModel ${terminalText(plan.catalog_row?.model.model_key ?? "unavailable")}\nDeployment ${terminalText(plan.catalog_row?.deployment.model_deployment_id ?? "unavailable")}\nMaximum spend USD ${terminalText(plan.maximum_spend_usd)}\n`);
+    if (!await confirm(input.approvalQuestion(plan))) {
+        process.stdout.write("cancelled\n");
+        return;
+    }
+    const application = await applyApprovedPlan(solver, {
+        ...plan,
+        ...(plan.catalog_row ? { model_deployment_id: plan.catalog_row.deployment.model_deployment_id } : {}),
+    }, false, input.applicationKey);
+    await finishApplication(solver, application);
+}
+async function runModelUse(solver, args) {
+    assertCommandFlags(args, 3, new Set(["--json", "--no-browser"]), new Set(["--model-deployment-id", "--idempotency-key"]));
+    const requested = args[2];
+    if (!requested || requested.startsWith("--"))
+        throw new InspectionUsageError("usage: millwork models use <catalog-model> [--model-deployment-id <id>]");
+    const row = resolveCatalogModel((await solver.modelCatalog.get()).models, requested, flagValue(args, "--model-deployment-id"));
+    const templateId = row.connection.access_lane === "byok" ? "byok-open-model" : "pooled-open-model";
+    await runPlannedModelApplication(solver, {
+        templateId,
+        modelDeploymentId: row.deployment.model_deployment_id,
+        applicationKey: flagValue(args, "--idempotency-key") ?? `tenant-model-use:${row.deployment.model_deployment_id}`,
+        approvalQuestion: (plan) => templateId === "byok-open-model"
+            ? "Connect this customer-owned route, prove the exact new arm, and select it only after success? [y/N] "
+            : `Prove this exact hosted arm up to USD ${plan.maximum_spend_usd} and select it only after success? [y/N] `,
+    });
+}
+async function runModelAdd(solver, args) {
+    assertCommandFlags(args, 3, new Set(["--json", "--yes"]), new Set(["--model-deployment-id", "--idempotency-key"]));
+    const requested = args[2];
+    if (!requested || requested.startsWith("--"))
+        throw new InspectionUsageError("usage: millwork models add <catalog-model> [--model-deployment-id <id>]");
+    const row = resolveCatalogModel((await solver.modelCatalog.get()).models, requested, flagValue(args, "--model-deployment-id"));
+    if (!hasFlag(args, "--yes") && (!interactive || !await confirm(`Add ${row.model.model_key} as another ready arm without changing the current model? [y/N] `))) {
+        process.stdout.write(interactive ? "cancelled\n" : `${JSON.stringify({ state: "action_required", next_action: "re-run with --yes" })}\n`);
+        if (!interactive)
+            process.exitCode = 2;
+        return;
+    }
+    const outcome = await solver.arms.create(row.arm_registration_template, {
+        idempotencyKey: flagValue(args, "--idempotency-key") ?? `models-add:${row.deployment.model_deployment_id}`,
+    });
+    if (interactive)
+        process.stdout.write(`Added arm ${terminalText(outcome.arm_id)} — ${terminalText(outcome.status)}. Current selection unchanged.\n`);
+    else
+        emitJson({ operation: "models_add", ...outcome, selection_changed: false });
+}
+async function runArmDisable(solver, args) {
+    assertCommandFlags(args, 3, new Set(["--json", "--yes"]), new Set(["--idempotency-key"]));
+    const armId = args[2];
+    if (!armId || armId.startsWith("--"))
+        throw new InspectionUsageError("usage: millwork arms disable <arm-id> [--yes]");
+    const current = await solver.tenantTemplates.current();
+    const warning = current?.managed_arm_id === armId
+        ? "This is the current model; disabling it will leave no runnable default."
+        : "This keeps history and does not change another selected model.";
+    if (!hasFlag(args, "--yes") && (!interactive || !await confirm(`Disable ${armId}? ${warning} [y/N] `))) {
+        process.stdout.write(interactive ? "cancelled\n" : `${JSON.stringify({ state: "action_required", next_action: "re-run with --yes" })}\n`);
+        if (!interactive)
+            process.exitCode = 2;
+        return;
+    }
+    const outcome = await solver.arms.disable(armId, {
+        idempotencyKey: flagValue(args, "--idempotency-key") ?? `arms-disable:${armId}`,
+    });
+    if (interactive)
+        process.stdout.write(`Disabled arm ${terminalText(outcome.arm_id)}. ${terminalText(warning)}\n`);
+    else
+        emitJson({ operation: "arms_disable", ...outcome, was_current: current?.managed_arm_id === armId });
+}
+async function runVerifierAttach(solver, args) {
+    assertCommandFlags(args, 2, new Set(["--json", "--yes"]), new Set(["--name", "--version", "--endpoint", "--auth-ref", "--data-class", "--idempotency-key"]));
+    const endpoint = flagValue(args, "--endpoint");
+    const authRef = flagValue(args, "--auth-ref");
+    if (!endpoint || !authRef)
+        throw new InspectionUsageError("verifier attach requires --endpoint <https-url> and --auth-ref <credential-handle>");
+    if (!hasFlag(args, "--yes") && (!interactive || !await confirm(`Attach and probe verifier endpoint ${endpoint}? [y/N] `))) {
+        process.stdout.write(interactive ? "cancelled\n" : `${JSON.stringify({ state: "action_required", next_action: "re-run with --yes" })}\n`);
+        if (!interactive)
+            process.exitCode = 2;
+        return;
+    }
+    const dataClass = (flagValue(args, "--data-class") ?? "public");
+    if (!new Set(["public", "sandbox", "tenant_internal"]).has(dataClass)) {
+        throw new InspectionUsageError("--data-class must be public, sandbox, or tenant_internal");
+    }
+    const outcome = await solver.verifiers.create({
+        display_name: flagValue(args, "--name") ?? "Millwork verifier",
+        version: flagValue(args, "--version") ?? "1",
+        kind: "endpoint",
+        endpoint: { url: endpoint, auth_ref: authRef },
+        input_data_classes: [dataClass],
+        scoring: { correctness: "boolean_anchors", quality: "scalar_0_1" },
+    }, { idempotencyKey: flagValue(args, "--idempotency-key") ?? `verifier-attach:${createHash("sha256").update(endpoint).digest("hex")}` });
+    if (interactive)
+        process.stdout.write(`Verifier ${terminalText(outcome.verifier_id)} — ${terminalText(outcome.status)}.\n`);
+    else
+        emitJson({ operation: "verifier_attach", ...outcome });
+}
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function runExecution(solver, args) {
+    assertCommandFlags(args, 1, new Set(["--json", "--yes"]), new Set([
+        "--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
+        "--max-runtime-s", "--data-class", "--idempotency-key",
+    ]), true);
+    const positional = args.slice(1).filter((value, index, tail) => !value.startsWith("--")
+        && (index === 0 || !new Set(["--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
+            "--max-runtime-s", "--data-class", "--idempotency-key"]).has(tail[index - 1])));
+    const objective = flagValue(args, "--objective") ?? positional.join(" ");
+    if (!objective)
+        throw new InspectionUsageError("run requires an objective, for example: millwork run --preset <id> --objective \"Summarize this\"");
+    const selection = await solver.tenantTemplates.current();
+    const preset = flagValue(args, "--preset");
+    const armId = flagValue(args, "--arm-id") ?? selection?.managed_arm_id;
+    if (!armId)
+        throw new InspectionUsageError("No current model is selected. Run millwork models use <catalog-model>, or pass --arm-id.");
+    let policy;
+    if (preset) {
+        if (!selection || selection.request_preset_id !== preset) {
+            throw new InspectionUsageError(`Preset ${terminalText(preset)} is not the current model's proved preset.`);
+        }
+        policy = {
+            data_classes: [...selection.request_policy.data_classes],
+            budget: { ...selection.request_policy.budget },
+        };
+    }
+    else {
+        const maxCost = Number(flagValue(args, "--max-cost-usd"));
+        const maxRuntime = Number(flagValue(args, "--max-runtime-s"));
+        const dataClass = (flagValue(args, "--data-class") ?? "public");
+        if (!Number.isFinite(maxCost) || maxCost <= 0 || !Number.isInteger(maxRuntime) || maxRuntime <= 0) {
+            throw new InspectionUsageError("Without --preset, positive --max-cost-usd and --max-runtime-s are required.");
+        }
+        if (!new Set(["public", "sandbox", "tenant_internal"]).has(dataClass)) {
+            throw new InspectionUsageError("--data-class must be public, sandbox, or tenant_internal");
+        }
+        policy = { data_classes: [dataClass], budget: { max_cost_usd: maxCost, max_runtime_s: maxRuntime } };
+    }
+    if (!hasFlag(args, "--yes") && (!interactive || !await confirm(`Run exact arm ${armId} with maximum model spend USD ${policy.budget.max_cost_usd} and ${policy.budget.max_runtime_s}s runtime? [y/N] `))) {
+        process.stdout.write(interactive ? "cancelled\n" : `${JSON.stringify({ state: "action_required", next_action: "re-run with --yes" })}\n`);
+        if (!interactive)
+            process.exitCode = 2;
+        return;
+    }
+    const execution = await solver.executions.create({
+        task: { objective },
+        policy,
+        routing: { required_arm_id: armId },
+        ...(flagValue(args, "--verifier-id") ? { verifier_id: flagValue(args, "--verifier-id") } : {}),
+    }, { idempotencyKey: flagValue(args, "--idempotency-key")
+            ?? `run:${createHash("sha256").update(JSON.stringify([objective, armId, Date.now()])).digest("hex")}` });
+    const deadline = Date.now() + (policy.budget.max_runtime_s + 30) * 1_000;
+    let current = execution;
+    while (!["completed", "failed", "cancelled", "expired"].includes(current.status) && Date.now() < deadline) {
+        await sleep(1_000);
+        current = await solver.executions.get(execution.execution_id);
+    }
+    if (!["completed", "failed", "cancelled", "expired"].includes(current.status)) {
+        throw new Error(`Execution ${execution.execution_id} did not reach a terminal state before the local wait bound. Inspect it; no retry was started.`);
+    }
+    const result = current.status === "completed" ? await solver.executions.result(current.execution_id) : null;
+    const receipt = await solver.receipts.get(current.execution_id);
+    if (interactive)
+        process.stdout.write(`${result ? `${terminalText(result.final_text, true)}\n` : ""}Execution ${terminalText(current.execution_id)} — ${terminalText(current.status)}\nReceipt ${terminalText(current.execution_id)}\n`);
+    else
+        emitJson({ operation: "run", execution: current, result, receipt });
+    if (current.status !== "completed")
         process.exitCode = 1;
 }
 async function main() {
@@ -144,35 +384,43 @@ async function main() {
         process.exitCode = result.exitCode;
         return;
     }
-    if (args[0] !== "tenant" || args[1] !== "start") {
-        process.stderr.write("usage: millwork <docs|doctor|--version|models list [--json]|tenant show [--application-id <id> | --template <id> [--idempotency-key <key>]] [--json]|tenant start [--template starter|pooled-open-model|byok-open-model] [--model-deployment-id <id>] [--dry-run | --plan --json] [--digest <sha>] [--issued-at <iso>] [--idempotency-key <key>] [--application-id <id> --resume-action <action> [--live-proof-digest <sha>]] [--no-browser] [--write] [--json]>\n");
+    const tenantStart = args[0] === "tenant" && args[1] === "start";
+    const reconfiguration = (args[0] === "models" && (args[1] === "use" || args[1] === "add"))
+        || (args[0] === "arms" && args[1] === "disable")
+        || args[0] === "run"
+        || (args[0] === "provider" && args[1] === "connect")
+        || (args[0] === "verifier" && args[1] === "attach");
+    if (!tenantStart && !reconfiguration) {
+        process.stderr.write("usage: millwork <docs|doctor|--version|models list|models use <catalog-model>|models add <catalog-model>|arms disable <arm-id>|run --preset <id> --objective <task>|provider connect openrouter|verifier attach --endpoint <url> --auth-ref <handle>|tenant show|tenant start> [options]\n");
         process.exit(2);
     }
-    const booleanFlags = new Set(["--write", "--plan", "--json", "--no-browser"]);
-    const valueFlags = new Set([
-        "--template",
-        "--model-deployment-id",
-        "--digest",
-        "--issued-at",
-        "--idempotency-key",
-        "--application-id",
-        "--resume-action",
-        "--live-proof-digest",
-    ]);
-    for (let index = 2; index < args.length; index += 1) {
-        const argument = args[index];
-        if (booleanFlags.has(argument))
-            continue;
-        if (valueFlags.has(argument)) {
-            if (!args[index + 1] || args[index + 1].startsWith("--")) {
-                process.stderr.write(`${argument} requires a value\n`);
-                process.exit(2);
+    if (tenantStart) {
+        const booleanFlags = new Set(["--write", "--plan", "--json", "--no-browser"]);
+        const valueFlags = new Set([
+            "--template",
+            "--model-deployment-id",
+            "--digest",
+            "--issued-at",
+            "--idempotency-key",
+            "--application-id",
+            "--resume-action",
+            "--live-proof-digest",
+        ]);
+        for (let index = 2; index < args.length; index += 1) {
+            const argument = args[index];
+            if (booleanFlags.has(argument))
+                continue;
+            if (valueFlags.has(argument)) {
+                if (!args[index + 1] || args[index + 1].startsWith("--")) {
+                    process.stderr.write(`${argument} requires a value\n`);
+                    process.exit(2);
+                }
+                index += 1;
+                continue;
             }
-            index += 1;
-            continue;
+            process.stderr.write(`unknown argument: ${terminalText(argument)}\n`);
+            process.exit(2);
         }
-        process.stderr.write(`unknown argument: ${terminalText(argument)}\n`);
-        process.exit(2);
     }
     const missing = qualifyMissingCredential({
         apiKey: process.env.SOLVERAPI_API_KEY,
@@ -183,6 +431,29 @@ async function main() {
         apiKey: process.env.SOLVERAPI_API_KEY,
         baseUrl: process.env.SOLVERAPI_BASE_URL ?? DEFAULT_API_BASE_URL,
     });
+    if (args[0] === "models" && args[1] === "use")
+        return runModelUse(solver, args);
+    if (args[0] === "models" && args[1] === "add")
+        return runModelAdd(solver, args);
+    if (args[0] === "arms" && args[1] === "disable")
+        return runArmDisable(solver, args);
+    if (args[0] === "run")
+        return runExecution(solver, args);
+    if (args[0] === "verifier" && args[1] === "attach")
+        return runVerifierAttach(solver, args);
+    if (args[0] === "provider" && args[1] === "connect") {
+        assertCommandFlags(args, 3, new Set(["--json", "--no-browser"]), new Set(["--model-deployment-id", "--idempotency-key"]));
+        if (args[2] !== "openrouter") {
+            throw new InspectionUsageError("OpenRouter is the only available customer-owned connector. Provider-neutral browser presentation does not imply other connectors.");
+        }
+        await runPlannedModelApplication(solver, {
+            templateId: "byok-open-model",
+            modelDeploymentId: flagValue(args, "--model-deployment-id"),
+            applicationKey: flagValue(args, "--idempotency-key") ?? tenantStartKey("byok-open-model"),
+            approvalQuestion: () => "Open OpenRouter consent, test and sync the connection, prove its exact arm, then select it after success? [y/N] ",
+        });
+        return;
+    }
     const applicationId = flagValue(args, "--application-id");
     const resumeAction = flagValue(args, "--resume-action");
     const idempotencyKey = flagValue(args, "--idempotency-key");

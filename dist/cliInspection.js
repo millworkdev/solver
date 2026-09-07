@@ -98,7 +98,7 @@ function tenantSummary(applications, credit) {
             lines.push(`Retained receipt: ${terminalText(application.receipt.receipt_id)} — ${terminalText(application.receipt.href)}`);
         lines.push(`Next action (not performed): ${terminalText(application.next_action.type)} — ${terminalText(application.next_action.detail)}`);
     }
-    lines.push("", "No readiness refresh, consent polling, live authorization, model change, or file write was performed.", "Default lookups cover this CLI's three starter keys, not every custom application. Use --application-id for an exact snapshot.");
+    lines.push("", "No readiness refresh, consent polling, live authorization, model change, or file write was performed.", "The default lookup shows the current proved model selection. Use --application-id or --template for an exact historical application.");
     return `${lines.join("\n")}\n`;
 }
 function modelSummary(catalog) {
@@ -127,14 +127,21 @@ export async function inspectCommand(command, solver, readAccount) {
         return { exitCode: 0, document: { ...catalog, schema_version: schemaVersion, read_only: true }, human: modelSummary(catalog) };
     }
     const lookups = command.applicationId ? [{ application_id: command.applicationId }]
-        : (command.templateId ? [command.templateId] : templateIds).map((templateId) => ({ template_id: templateId,
-            idempotency_key: command.applicationKey ?? tenantStartKey(templateId) }));
-    const applications = command.applicationId ? [await solver.tenantTemplates.get(command.applicationId)]
-        : (await Promise.all(lookups.map(async (lookup) => {
-            if (!("template_id" in lookup))
-                throw new Error("Invalid inspection lookup");
-            return (await solver.tenantTemplates.recover(lookup)).application;
-        }))).filter((application) => application !== null);
+        : command.templateId ? [{ template_id: command.templateId,
+                idempotency_key: command.applicationKey ?? tenantStartKey(command.templateId) }]
+            : [{ current_selection: true }];
+    let applications;
+    if (command.applicationId)
+        applications = [await solver.tenantTemplates.get(command.applicationId)];
+    else if (command.templateId) {
+        const recovered = await solver.tenantTemplates.recover({ template_id: command.templateId,
+            idempotency_key: command.applicationKey ?? tenantStartKey(command.templateId) });
+        applications = recovered.application ? [recovered.application] : [];
+    }
+    else {
+        const selection = await solver.tenantTemplates.current();
+        applications = selection ? [await solver.tenantTemplates.get(selection.application_id)] : [];
+    }
     const credit = await readCreditSummary(readAccount);
     return { exitCode: 0, document: { schema_version: schemaVersion, read_only: true,
             state: applications.length ? "found" : "not_found", lookups, applications, credit },

@@ -9,16 +9,14 @@ npm install @millwork/solver
 ```
 
 `npm install @millwork/solver` resolves the `latest` dist-tag. Pin an exact
-version for reproducible installs. Pre-promotion versions are published under
-the `candidate` dist-tag and are never installed by default.
+version for reproducible application builds.
 
 ## CLI
 
-The candidate release includes the `millwork` executable. Pin the candidate
-version explicitly while `latest` remains on the bootstrap release:
+Start the complete terminal setup with one command:
 
 ```bash
-npx --yes @millwork/solver@0.1.3 tenant start
+npx --yes @millwork/solver tenant start
 ```
 
 `millwork doctor` checks the local Node, API base, and API-key configuration
@@ -37,6 +35,12 @@ request. JSON and headless output never prompts or retries consent implicitly.
 The command prints its recovery command and retains a completed result/receipt;
 recovery does not repeat that paid run. Current access and release guidance is
 available through `millwork docs`.
+
+After setup, `millwork tenant show` reports the current proved model and preset.
+Use `millwork models list`, `models use`, and `models add` to inspect or change
+models; a replacement becomes current only after its test run passes. Use
+`millwork run --preset <id> --objective "<task>"` for the next task. Model,
+provider, verifier, and paid-run changes ask before they mutate or spend.
 
 `--version` reports the installed version, not the registry's current tags.
 Its JSON report and `doctor` link to current support information instead of

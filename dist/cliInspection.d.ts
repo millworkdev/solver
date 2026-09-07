@@ -26,7 +26,7 @@ export interface InspectionResult {
 export declare function inspectionQualification(command: InspectionCommand, qualification: Qualification): InspectionResult;
 export declare function inspectionApiError(command: InspectionCommand, error: unknown): InspectionResult | null;
 type InspectionResources = {
-    tenantTemplates: Pick<Solver["tenantTemplates"], "plan" | "get" | "recover">;
+    tenantTemplates: Pick<Solver["tenantTemplates"], "plan" | "get" | "recover" | "current">;
     modelCatalog: Pick<Solver["modelCatalog"], "get">;
 };
 /** Only stateless plan and GET resource methods are available to this path. */

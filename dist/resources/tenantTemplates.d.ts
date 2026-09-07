@@ -1,5 +1,5 @@
 import type { HttpClient } from "../httpClient.js";
-import type { TenantTemplateApplication, TenantTemplateId, TenantTemplatePlan } from "../types.js";
+import type { TenantTemplateApplication, TenantTemplateId, TenantTemplatePlan, TenantModelSelection } from "../types.js";
 export declare class TenantTemplatesResource {
     private readonly http;
     constructor(http: HttpClient);
@@ -30,6 +30,10 @@ export declare class TenantTemplatesResource {
         idempotencyKey: string;
     }): Promise<TenantTemplateApplication>;
     get(applicationId: string): Promise<TenantTemplateApplication>;
+    current(): Promise<TenantModelSelection | null>;
+    select(applicationId: string, opts: {
+        idempotencyKey: string;
+    }): Promise<TenantModelSelection>;
     recover(input: {
         template_id: TenantTemplateId;
         idempotency_key: string;

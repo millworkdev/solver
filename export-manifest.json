@@ -14,7 +14,7 @@
     },
     {
       "path": "dist/cli.js",
-      "sha256": "a63b15d689421edde400d3a6dd61cc86d8db9eb54af2731c767f53664c90e87d"
+      "sha256": "f26996daa2abe7ef4475e27fdddc196286a62ced733390213a20532e55759535"
     },
     {
       "path": "dist/cliDiscovery.d.ts",
@@ -34,11 +34,11 @@
     },
     {
       "path": "dist/cliInspection.d.ts",
-      "sha256": "1ef84b7ddfbdb237881ce189f26d081c33a9aa7061923e4212bdf856896641f2"
+      "sha256": "a3327f5a74fef1d13a7612b0f5c4454cb24323a107d73ce3d438eebd458734b4"
     },
     {
       "path": "dist/cliInspection.js",
-      "sha256": "d5aae73372a44ba67e6f19fda9fb732b3e80209e455c488530834d6e239a12dc"
+      "sha256": "d2cbf514d533a580b2740a59c2d81984d836b6ed763a00c4e7980e2f103df666"
     },
     {
       "path": "dist/cliQualification.d.ts",
@@ -74,7 +74,7 @@
     },
     {
       "path": "dist/index.d.ts",
-      "sha256": "4d9681a41767f0ce1fd54aa7c69d8285fa77368fcf056330ec2bd9e90156ff71"
+      "sha256": "4a092279915faf9180ccd6fde3d73d143d7ee6ff94e7ecd5a8735fa4d34f50a8"
     },
     {
       "path": "dist/index.js",
@@ -202,11 +202,11 @@
     },
     {
       "path": "dist/resources/tenantTemplates.d.ts",
-      "sha256": "58305a231f64240955eea6615febcbaf74f4245f7c64b986fedcd8d7cc659ad6"
+      "sha256": "1b97ee336ea9e503ebad326fa2ddf3c37ad3df25a3dd72e85e619d046b03831c"
     },
     {
       "path": "dist/resources/tenantTemplates.js",
-      "sha256": "989b6123b38ec9614688c8e05fe9a49ed032b6b88d15a7e6c6b99b0c13224ee8"
+      "sha256": "48c896cb146f41d6cde600cebebb9dddaa4d3e4e382fdb407d3adcbb93b4f7a5"
     },
     {
       "path": "dist/resources/usage.d.ts",
@@ -258,12 +258,12 @@
     },
     {
       "path": "dist/types.d.ts",
-      "sha256": "b8f5241ef365e1c98ba72482d15a7c3dc5598e7a75f58d5e25098e26d3b8fad6"
+      "sha256": "bd8a1164f92b18c0d97edd721c2d08fbe3ee7e37247c5a2f27bdff112f8bb971"
     },
     {
       "path": "dist/types.js",
       "sha256": "c29d3594690c781e06590537a3dc7852b31e54b19a7f3deb585a1b381a89afb4"
     }
   ],
-  "aggregate_sha256": "89984354d061e48133a6c10397a72df162c3c0596c42949aa6677b953f9c39a0"
+  "aggregate_sha256": "2316c78b4863eaf7a5ab5a9cfc5e8754347892ffa4950542f01248f2d770c96f"
 }

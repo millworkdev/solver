@@ -47,6 +47,8 @@ export interface ArmWrite {
     provider?: string;
     model_id?: string;
     credential_ref?: string;
+    /** Certified deployment binding used by catalog registration templates. */
+    model_deployment_id?: string;
     endpoint?: ArmEndpoint;
     lifecycle?: ArmLifecycle;
     artifact?: ArmArtifact;
@@ -266,6 +268,29 @@ export interface TenantTemplateApplication {
     diagnostics: Record<string, unknown>;
     created_at: string;
     [extra: string]: unknown;
+}
+/** The tenant's current template-managed model.  This pointer moves only
+ * after the referenced application's exact-arm live proof succeeds. */
+export interface TenantModelSelection {
+    application_id: string;
+    template_id: TenantTemplateId;
+    template_version: string;
+    managed_arm_id: string;
+    model_deployment_id: string;
+    request_preset_id: string;
+    request_policy: {
+        mode: "live";
+        data_classes: DataClass[];
+        budget: {
+            max_cost_usd: number;
+            max_runtime_s: number;
+        };
+        fallback_policy: "none";
+        verifier: "platform.output_presence";
+    };
+    proof_execution_id: string;
+    selected_at: string;
+    updated_at: string;
 }
 export interface Execution {
     execution_id: string;

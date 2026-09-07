@@ -27,6 +27,21 @@ export class TenantTemplatesResource {
             path: `tenant-template-applications/${encodeURIComponent(applicationId)}`,
         });
     }
+    async current() {
+        const response = await this.http.request({
+            method: "GET",
+            path: "tenant-model-selection",
+        });
+        return response.selection;
+    }
+    async select(applicationId, opts) {
+        return this.http.request({
+            method: "POST",
+            path: "tenant-model-selection",
+            body: { application_id: applicationId },
+            idempotencyKey: opts.idempotencyKey,
+        });
+    }
     async recover(input) {
         return this.http.request({ method: "GET", path: "tenant-template-applications", query: input });
     }
