@@ -4,6 +4,53 @@ export const TENANT_START_OUTPUT_VERSION = "millwork.tenant-start.v1";
 export function tenantStartIsInteractive(args, stdinTTY, stdoutTTY) {
     return !args.includes("--json") && stdinTTY && stdoutTTY;
 }
+export function planCostSummary(plan) {
+    const modelBudget = plan.request_policy?.mode === "live" ? plan.request_policy.budget.max_cost_usd : 0;
+    const fee = Math.max(0, Number((plan.maximum_spend_usd - modelBudget).toFixed(6)));
+    const paidNow = plan.effects?.some(effect => effect.id === "submit_bounded_live_proof") === true;
+    return `Model: ${terminalText(plan.catalog_row?.model.model_key ?? plan.byok_source?.model_key ?? "Echo (no provider)")}\n`
+        + `Provider: ${terminalText(plan.catalog_row?.source.source_id ?? plan.byok_source?.source_id ?? "none (Echo)")}\n`
+        + `Lane: ${terminalText(plan.access_lane)}\n`
+        + `Data classes: ${plan.request_policy?.data_classes?.map(value => terminalText(value)).join(", ") || "not available"}\n`
+        + `Runtime limit: ${plan.request_policy?.budget.max_runtime_s === undefined ? "not available" : `${plan.request_policy.budget.max_runtime_s}s`}\n`
+        + `Millwork platform fee per accepted live execution: USD ${fee}\n`
+        + `Model usage budget: USD ${modelBudget} — ${plan.access_lane === "byok" ? "billed by your provider, separately from Millwork credit" : "billed through Millwork credit"}\n`
+        + `Combined spending allowance: USD ${plan.maximum_spend_usd}; not a final price quote.\n`
+        + (modelBudget > 0 ? "The model budget is a stop threshold; an in-flight provider call can exceed it.\n" : "")
+        + (paidNow ? "Applying this digest authorizes the listed live proof.\n" : "This step does not authorize a paid model run.\n");
+}
+/** Agents hand over a safe application ID; never copy approval URLs to chat. */
+export function browserHandoff(application) {
+    if (application.state !== "consent_pending")
+        return undefined;
+    return {
+        type: "human_browser_approval_required",
+        application_id: application.application_id,
+        command: ["millwork", "tenant", "start", "--application-id", application.application_id],
+        expires_at: application.consent?.expires_at ?? null,
+        detail: "Ask the user to run this command in their interactive terminal now. It opens the provider approval page and continues the saved setup. Keep the consent URL private; do not paste it into shared chat. Browser approval does not authorize a paid run.",
+    };
+}
+export function liveProofCostSummary(application) {
+    const policy = application.diagnostics.request_policy;
+    const requested = application.diagnostics.requested;
+    const modelBudget = policy?.budget?.max_cost_usd;
+    const combined = application.diagnostics.maximum_spend_usd;
+    if (typeof modelBudget !== "number" || !Number.isFinite(modelBudget)
+        || typeof combined !== "number" || !Number.isFinite(combined) || combined < modelBudget) {
+        return "Cost breakdown unavailable. Inspect the saved application's request policy before approving a live run.\n";
+    }
+    const byok = requested?.access_lane === "byok" || application.template_id === "byok-open-model";
+    return `Model: ${terminalText(requested?.model_key ?? "see saved plan")}\n`
+        + `Provider: ${terminalText(requested?.source_id ?? "see saved plan")}\n`
+        + `Lane: ${byok ? "customer-owned — model usage billed by your provider" : "Millwork pool — model usage billed through Millwork credit"}\n`
+        + `Data classes: ${Array.isArray(policy?.data_classes) ? policy.data_classes.map(value => terminalText(value)).join(", ") : "see saved plan"}\n`
+        + `Runtime limit: ${typeof policy?.budget?.max_runtime_s === "number" ? `${policy.budget.max_runtime_s}s` : "see saved plan"}\n`
+        + `Millwork platform fee: USD ${Number((combined - modelBudget).toFixed(6))}\n`
+        + `Model usage budget: USD ${modelBudget}\nCombined spending allowance: USD ${combined}\n`
+        + "The model budget is a stop threshold, not a final quote; an in-flight call can exceed it.\n"
+        + `Approval digest: ${terminalText(application.live_proof?.digest)}\nExpires: ${terminalText(application.live_proof?.expires_at)}\n`;
+}
 /** Model output, API details and identifiers are data, never terminal commands. */
 export function terminalText(value, multiline = false) {
     const text = stripVTControlCharacters(String(value ?? ""))

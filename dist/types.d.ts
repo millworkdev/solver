@@ -804,6 +804,7 @@ export interface Account {
     billing: {
         funded_state: "funded" | "sandbox";
         manage_available: boolean;
+        platform_fee_usd_per_execution?: number;
     } | null;
 }
 export {};

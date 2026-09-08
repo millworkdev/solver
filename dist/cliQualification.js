@@ -1,14 +1,24 @@
 import { SolverApiError } from "./errors.js";
+import { API_KEYS_URL, KEY_GUIDANCE, START_DOCS_URL } from "./cliGuidance.js";
 export function qualifyMissingCredential(input) {
-    if (input.apiKey && input.apiKey.length > 0)
+    if (input.apiKey?.trim())
         return null;
     return {
         state: "no_credential",
         next_action: {
-            type: "apply_for_preview",
-            detail: "Sign in through the existing browser preview-application route. Submitting that application creates only an application record.",
+            type: "configure_api_key",
+            detail: KEY_GUIDANCE,
+            url: API_KEYS_URL,
+            docs_url: `${START_DOCS_URL}#configure-your-api-key`,
         },
     };
+}
+export function qualifyRejectedCredential() {
+    return { state: "credential_rejected", next_action: {
+            type: "replace_api_key",
+            detail: `Millwork rejected this API key. It may be invalid, expired or revoked. ${KEY_GUIDANCE} This is not an admission decision.`,
+            url: API_KEYS_URL, docs_url: `${START_DOCS_URL}#configure-your-api-key`,
+        } };
 }
 export function qualifyOrganizationInviteRequired() {
     return {
@@ -75,11 +85,15 @@ export function qualificationFromApiError(error) {
     if (!(error instanceof SolverApiError))
         return null;
     if (error.status === 401) {
+        // The authentication problem code is authoritative. Do not infer an
+        // admission denial or invitation requirement from arbitrary error prose.
+        if (error.type.endsWith("/unauthenticated"))
+            return qualifyRejectedCredential();
         if (new RegExp("\\binvit", "i").test(error.detail ?? ""))
             return qualifyOrganizationInviteRequired();
-        return qualifyTenantNotAdmitted();
+        return qualifyRejectedCredential();
     }
-    if (error.status === 403)
+    if (error.status === 403 && error.type.endsWith("/permission_denied"))
         return qualifyRoleLacksPermission();
     const previewDecision = new RegExp("preview.*(pending|reject)|(pending|reject).*preview", "i");
     if (error.status === 409 && previewDecision.test(error.detail ?? "")) {

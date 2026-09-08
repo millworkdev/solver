@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { API_KEYS_URL, KEY_GUIDANCE } from "./cliGuidance.js";
 export const TENANT_START_DOCS_URL = "https://docs.getmillwork.dev/get-started/tenant-start?utm_source=millwork_cli&utm_medium=cli&utm_campaign=tenant_onramp";
 export const DEFAULT_API_BASE_URL = "https://api.getmillwork.dev/v1";
 export const TESTED_NODE_MAJORS = [20, 22];
@@ -60,12 +61,14 @@ export function buildDoctorReport(environment, nodeVersion = process.versions.no
             referral_contains_user_identifier: false,
         },
         local_configuration_ready: localConfigurationReady,
+        authentication: { status: "not_checked", detail: "Doctor checks local configuration only. A configured key has not been verified with Millwork." },
+        api_keys_url: API_KEYS_URL,
         next_action: !runtimeSupported
             ? "Use Node.js 20 or 22, the tested CLI runtimes."
             : !apiBase.valid
                 ? "Set SOLVERAPI_BASE_URL to an HTTPS URL or a loopback HTTP URL without credentials or query parameters."
                 : !credentialConfigured
-                    ? "Create your organization API key in the dashboard, then set SOLVERAPI_API_KEY without printing it."
+                    ? KEY_GUIDANCE
                     : "Run millwork tenant start to review your setup and continue. No paid run starts without authorization.",
     };
 }

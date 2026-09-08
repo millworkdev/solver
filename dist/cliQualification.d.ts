@@ -1,9 +1,11 @@
-export type QualificationState = "no_credential" | "preview_pending_or_rejected" | "tenant_not_admitted" | "organization_invite_required" | "role_lacks_permission" | "pool_not_certified" | "pool_not_entitled" | "pool_no_capacity" | "approved";
+export type QualificationState = "no_credential" | "credential_rejected" | "preview_pending_or_rejected" | "tenant_not_admitted" | "organization_invite_required" | "role_lacks_permission" | "pool_not_certified" | "pool_not_entitled" | "pool_no_capacity" | "approved";
 export interface Qualification {
     state: QualificationState;
     next_action: {
         type: string;
         detail: string;
+        url?: string;
+        docs_url?: string;
     };
     offered_plan?: {
         template_id: string;
@@ -19,6 +21,7 @@ export interface Qualification {
 export declare function qualifyMissingCredential(input: {
     apiKey?: string;
 }): Qualification | null;
+export declare function qualifyRejectedCredential(): Qualification;
 export declare function qualifyOrganizationInviteRequired(): Qualification;
 export declare function qualifyPreviewPendingOrRejected(status: "pending" | "rejected"): Qualification;
 export declare function qualifyTenantNotAdmitted(): Qualification;
