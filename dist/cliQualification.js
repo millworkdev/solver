@@ -93,8 +93,11 @@ export function qualificationFromApiError(error) {
             return qualifyOrganizationInviteRequired();
         return qualifyRejectedCredential();
     }
+    // A 403 can come from role checks, human-only routes, or the idempotency
+    // ledger. The problem detail is the only source that knows which one. Let
+    // the normal API-error path retain that detail instead of inventing a role.
     if (error.status === 403 && error.type.endsWith("/permission_denied"))
-        return qualifyRoleLacksPermission();
+        return null;
     const previewDecision = new RegExp("preview.*(pending|reject)|(pending|reject).*preview", "i");
     if (error.status === 409 && previewDecision.test(error.detail ?? "")) {
         const rejected = new RegExp("reject", "i").test(`${error.detail ?? ""} ${error.type}`);

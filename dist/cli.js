@@ -8,12 +8,29 @@ import { cliApiError, safeErrorText } from "./cliGuidance.js";
 import { inspectCommand, inspectionApiError, inspectionQualification, InspectionUsageError, resolveInspectionCommand } from "./cliInspection.js";
 import { qualificationFromApiError, qualificationFromPlan, qualifyMissingCredential, } from "./cliQualification.js";
 import { POOL_STARTER_CONFIG_PATH, STARTER_CONFIG_PATH, STARTER_ECHO_EXAMPLE_PATH, STARTER_POOL_EXAMPLE_PATH, writeApprovedScaffold, } from "./starterScaffold.js";
-import { progressTenantStart, tenantStartKey } from "./tenantStartFlow.js";
+import { principalScopedIdempotencyKey, progressTenantStart, tenantStartKey } from "./tenantStartFlow.js";
 import { createConsentPresenter } from "./tenantConsentBrowser.js";
 import { applicationSummary, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
 const cliArgs = process.argv.slice(2);
 const interactive = tenantStartIsInteractive(cliArgs, Boolean(input.isTTY), Boolean(output.isTTY));
 let writtenFiles;
+const authenticatedPrincipalIds = new WeakMap();
+function authenticatedPrincipalId(solver) {
+    const cached = authenticatedPrincipalIds.get(solver);
+    if (cached)
+        return cached;
+    const pending = solver.account.get().then((account) => {
+        if (!account.authenticated_principal_id) {
+            throw new Error("Millwork did not return an authenticated machine-principal identifier.");
+        }
+        return account.authenticated_principal_id;
+    });
+    authenticatedPrincipalIds.set(solver, pending);
+    return pending;
+}
+async function defaultRequestKey(solver, operationKey) {
+    return principalScopedIdempotencyKey(await authenticatedPrincipalId(solver), operationKey);
+}
 function emitJson(value) {
     process.stdout.write(`${JSON.stringify({ ...value, schema_version: TENANT_START_OUTPUT_VERSION }, null, 2)}\n`);
 }
@@ -103,7 +120,7 @@ async function finishApplication(solver, initial) {
     if (application.state === "ready" && application.managed_arm_id
         && application.selected_model_deployment_id) {
         selection = await solver.tenantTemplates.select(application.application_id, {
-            idempotencyKey: `tenant-model-select:${application.application_id}`,
+            idempotencyKey: await defaultRequestKey(solver, `tenant-model-select:${application.application_id}`),
         });
         if (interactive)
             process.stderr.write(`Current model: ${terminalText(selection.managed_arm_id)}\n`);
@@ -214,7 +231,8 @@ async function runModelUse(solver, args) {
     await runPlannedModelApplication(solver, {
         templateId,
         modelDeploymentId: row.deployment.model_deployment_id,
-        applicationKey: flagValue(args, "--idempotency-key") ?? `tenant-model-use:${row.deployment.model_deployment_id}`,
+        applicationKey: flagValue(args, "--idempotency-key")
+            ?? await defaultRequestKey(solver, `tenant-model-use:${row.deployment.model_deployment_id}`),
         approvalQuestion: (plan) => templateId === "byok-open-model"
             ? "Connect this customer-owned route, prove the exact new arm, and select it only after success? [y/N] "
             : `Prove this exact hosted arm up to USD ${plan.maximum_spend_usd} and select it only after success? [y/N] `,
@@ -233,7 +251,8 @@ async function runModelAdd(solver, args) {
         return;
     }
     const outcome = await solver.arms.create(row.arm_registration_template, {
-        idempotencyKey: flagValue(args, "--idempotency-key") ?? `models-add:${row.deployment.model_deployment_id}`,
+        idempotencyKey: flagValue(args, "--idempotency-key")
+            ?? await defaultRequestKey(solver, `models-add:${row.deployment.model_deployment_id}`),
     });
     if (interactive)
         process.stdout.write(`Added arm ${terminalText(outcome.arm_id)} — ${terminalText(outcome.status)}. Current selection unchanged.\n`);
@@ -256,7 +275,8 @@ async function runArmDisable(solver, args) {
         return;
     }
     const outcome = await solver.arms.disable(armId, {
-        idempotencyKey: flagValue(args, "--idempotency-key") ?? `arms-disable:${armId}`,
+        idempotencyKey: flagValue(args, "--idempotency-key")
+            ?? await defaultRequestKey(solver, `arms-disable:${armId}`),
     });
     if (interactive)
         process.stdout.write(`Disabled arm ${terminalText(outcome.arm_id)}. ${terminalText(warning)}\n`);
@@ -286,7 +306,8 @@ async function runVerifierAttach(solver, args) {
         endpoint: { url: endpoint, auth_ref: authRef },
         input_data_classes: [dataClass],
         scoring: { correctness: "boolean_anchors", quality: "scalar_0_1" },
-    }, { idempotencyKey: flagValue(args, "--idempotency-key") ?? `verifier-attach:${createHash("sha256").update(endpoint).digest("hex")}` });
+    }, { idempotencyKey: flagValue(args, "--idempotency-key")
+            ?? await defaultRequestKey(solver, `verifier-attach:${createHash("sha256").update(endpoint).digest("hex")}`) });
     if (interactive)
         process.stdout.write(`Verifier ${terminalText(outcome.verifier_id)} — ${terminalText(outcome.status)}.\n`);
     else
@@ -466,7 +487,8 @@ async function main() {
         await runPlannedModelApplication(solver, {
             templateId: "byok-open-model",
             modelDeploymentId: flagValue(args, "--model-deployment-id"),
-            applicationKey: flagValue(args, "--idempotency-key") ?? tenantStartKey("byok-open-model"),
+            applicationKey: flagValue(args, "--idempotency-key")
+                ?? tenantStartKey("byok-open-model", await authenticatedPrincipalId(solver)),
             approvalQuestion: () => "Open OpenRouter consent, test and sync the connection, prove its exact arm, then select it after success? [y/N] ",
         });
         return;
@@ -511,7 +533,7 @@ async function main() {
         process.exit(2);
     }
     const templateId = templateValue;
-    const applicationKey = idempotencyKey ?? tenantStartKey(templateId);
+    const applicationKey = idempotencyKey ?? tenantStartKey(templateId, await authenticatedPrincipalId(solver));
     const modelDeploymentId = flagValue(args, "--model-deployment-id");
     const planInput = {
         template_id: templateId,

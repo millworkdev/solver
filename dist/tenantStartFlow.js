@@ -1,8 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { SolverApiError } from "./errors.js";
-/** Stable, tenant-scoped server identity. No API-key hash or project file cache. */
-export function tenantStartKey(template) {
-    return `millwork-tenant-start:v1:${template}`;
+/**
+ * Namespace a CLI-owned request key with the server's stable, non-secret
+ * authenticated-principal ID. API-key material, prefixes, and derivations never enter
+ * the header.
+ */
+export function principalScopedIdempotencyKey(principalId, operationKey) {
+    if (!/^key_[A-Za-z0-9]+$/.test(principalId)) {
+        throw new Error("Millwork did not return a valid authenticated principal identifier.");
+    }
+    return `millwork-cli:v1:${principalId}:${operationKey}`;
+}
+/** Stable setup identity within one tenant principal. */
+export function tenantStartKey(template, principalId) {
+    return principalScopedIdempotencyKey(principalId, `tenant-start:${template}`);
 }
 /** Current hosted action only; callback/code handling stays with the authenticated host. */
 export function hostedConsentUrl(application) {
