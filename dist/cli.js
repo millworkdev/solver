@@ -4,12 +4,13 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Solver } from "./client.js";
 import { DEFAULT_API_BASE_URL, resolveDiscoveryCommand } from "./cliDiscovery.js";
+import { cliApiError, safeErrorText } from "./cliGuidance.js";
 import { inspectCommand, inspectionApiError, inspectionQualification, InspectionUsageError, resolveInspectionCommand } from "./cliInspection.js";
 import { qualificationFromApiError, qualificationFromPlan, qualifyMissingCredential, } from "./cliQualification.js";
 import { POOL_STARTER_CONFIG_PATH, STARTER_CONFIG_PATH, STARTER_ECHO_EXAMPLE_PATH, STARTER_POOL_EXAMPLE_PATH, writeApprovedScaffold, } from "./starterScaffold.js";
 import { progressTenantStart, tenantStartKey } from "./tenantStartFlow.js";
 import { createConsentPresenter } from "./tenantConsentBrowser.js";
-import { applicationSummary, readCreditSummary, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
+import { applicationSummary, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
 const cliArgs = process.argv.slice(2);
 const interactive = tenantStartIsInteractive(cliArgs, Boolean(input.isTTY), Boolean(output.isTTY));
 let writtenFiles;
@@ -36,6 +37,8 @@ function hasFlag(args, name) {
 function emitQualification(qualification) {
     if (interactive) {
         process.stdout.write(`Setup paused — ${terminalText(qualification.state)}.\nNext: ${terminalText(qualification.next_action.detail)}\n`);
+        if (qualification.next_action.docs_url)
+            process.stdout.write(`${terminalText(qualification.next_action.docs_url)}\n`);
         if (qualification.offered_plan)
             process.stdout.write(`Alternative (explicit choice, never automatic fallback): ${terminalText(qualification.offered_plan.template_id)} — ${terminalText(qualification.offered_plan.next_action.detail)}\n`);
     }
@@ -91,9 +94,7 @@ async function finishApplication(solver, initial) {
             previous = marker;
         },
         approveLive: async (current) => {
-            process.stderr.write(`${terminalText(JSON.stringify({ application_id: current.application_id, live_proof: current.live_proof,
-                requested: current.diagnostics.requested, request_policy: current.diagnostics.request_policy,
-                maximum_spend_usd: current.diagnostics.maximum_spend_usd }, null, 2), true)}\n`);
+            process.stderr.write(liveProofCostSummary(current));
             return confirm("Authorize this exact bounded live proof? [y/N] ");
         },
     });
@@ -123,7 +124,8 @@ async function finishApplication(solver, initial) {
     if (interactive)
         process.stdout.write(applicationSummary(application, extras));
     else
-        emitJson({ ...application, ...extras, ...(selection ? { selection } : {}) });
+        emitJson({ ...application, ...extras, ...(selection ? { selection } : {}),
+            ...(browserHandoff(application) ? { human_handoff: browserHandoff(application) } : {}) });
     // Retaining a failed execution is not successful onboarding. Keep the
     // recovery document, but let scripts detect the terminal failure too.
     if (application.state === "failed_safe"
@@ -190,6 +192,7 @@ async function runPlannedModelApplication(solver, input) {
     const blocked = qualificationFromPlan(plan);
     if (blocked)
         emitQualification(blocked);
+    process.stderr.write(planCostSummary(plan));
     process.stderr.write(`Plan digest ${terminalText(plan.digest)}\nLane ${terminalText(plan.access_lane)}\nModel ${terminalText(plan.catalog_row?.model.model_key ?? "unavailable")}\nDeployment ${terminalText(plan.catalog_row?.deployment.model_deployment_id ?? "unavailable")}\nMaximum spend USD ${terminalText(plan.maximum_spend_usd)}\n`);
     if (!await confirm(input.approvalQuestion(plan))) {
         process.stdout.write("cancelled\n");
@@ -330,8 +333,22 @@ async function runExecution(solver, args) {
         }
         policy = { data_classes: [dataClass], budget: { max_cost_usd: maxCost, max_runtime_s: maxRuntime } };
     }
+    const [account, catalog, selectedArm] = await Promise.all([solver.account.get(), solver.modelCatalog.get(), solver.arms.get(armId)]);
+    const model = catalog.models.find(row => row.deployment.model_deployment_id === selectedArm.model_deployment_id);
+    const fee = account.billing?.platform_fee_usd_per_execution;
+    const costReview = { model_key: model?.model.model_key ?? null, arm_id: armId,
+        source_id: model?.source.source_id ?? null, access_lane: model?.connection.access_lane ?? null,
+        data_classes: [...policy.data_classes], max_runtime_s: policy.budget.max_runtime_s,
+        platform_fee_usd: fee ?? null,
+        model_budget_usd: policy.budget.max_cost_usd,
+        model_usage_payer: model?.connection.access_lane === "byok" ? "customer_provider_account" : model ? "millwork_credit" : "not_available",
+        combined_allowance_usd: fee === undefined ? null : Number((fee + policy.budget.max_cost_usd).toFixed(6)),
+        budget_note: "Model budget is a stop threshold, not a final quote; an in-flight call can exceed it." };
+    if (interactive)
+        process.stderr.write(`Model: ${terminalText(costReview.model_key ?? "not available")}\nProvider: ${terminalText(costReview.source_id ?? "not available")}\nLane: ${terminalText(costReview.access_lane ?? "not available")}\nData classes: ${costReview.data_classes.map(value => terminalText(value)).join(", ")}\nRuntime limit: ${costReview.max_runtime_s}s\nMillwork platform fee: ${fee === undefined ? "unavailable; review Billing" : `USD ${fee}`}\nModel usage budget: USD ${costReview.model_budget_usd} (${costReview.model_usage_payer})\nCombined allowance: ${costReview.combined_allowance_usd === null ? "unavailable" : `USD ${costReview.combined_allowance_usd}`}\n${costReview.budget_note}\n`);
     if (!hasFlag(args, "--yes") && (!interactive || !await confirm(`Run exact arm ${armId} with maximum model spend USD ${policy.budget.max_cost_usd} and ${policy.budget.max_runtime_s}s runtime? [y/N] `))) {
-        process.stdout.write(interactive ? "cancelled\n" : `${JSON.stringify({ state: "action_required", next_action: "re-run with --yes" })}\n`);
+        process.stdout.write(interactive ? "cancelled\n" : `${JSON.stringify({ state: "action_required", cost_review: costReview,
+            next_action: { type: "approve_run", detail: "Review this exact model, provider, lane, data classes, runtime limit and costs with the user. Only after spending approval, rerun with --yes. --json is output formatting, not spending permission." } })}\n`);
         if (!interactive)
             process.exitCode = 2;
         return;
@@ -546,6 +563,7 @@ async function main() {
         const blocked = qualificationFromPlan(plan);
         if (blocked)
             emitQualification(blocked);
+        process.stderr.write(planCostSummary(plan));
         process.stderr.write(`Plan digest ${terminalText(plan.digest)}\nExpires ${terminalText(plan.expires_at)}\nLane ${terminalText(plan.access_lane)}\nMaximum spend USD ${terminalText(plan.maximum_spend_usd)}\n`);
         if (plan.catalog_row) {
             process.stderr.write(`Model ${terminalText(plan.catalog_row.model.model_key)}\nDeployment ${terminalText(plan.catalog_row.deployment.model_deployment_id)}\n`);
@@ -577,6 +595,15 @@ async function main() {
     }
 }
 main().catch((error) => {
-    process.stderr.write(`${terminalText(error instanceof Error ? error.message : String(error))}\n`);
+    const qualification = qualificationFromApiError(error);
+    if (qualification)
+        emitQualification(qualification);
+    const problem = cliApiError(error);
+    if (problem && !interactive)
+        emitJson(problem);
+    else if (problem)
+        process.stderr.write(`${problem.title}\n${problem.detail ?? ""}\n${(problem.errors ?? []).map(({ field, message }) => `${field}: ${message}`).join("\n")}\nNext: ${problem.next_action.detail}\n${problem.next_action.url}\nRequest ID: ${problem.request_id}\n`);
+    else
+        process.stderr.write(`${safeErrorText(error instanceof Error ? error.message : String(error))}\n`);
     process.exit(error instanceof InspectionUsageError ? 2 : 1);
 });

@@ -5,7 +5,14 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { scanSourceMap, scanTextContent } from "./check-public-content.mjs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { defaultFileExists, resolvesInsideRepository, scanSourceMap, scanTextContent } from "./check-public-content.mjs";
+
+const scannerPath = resolve(dirname(fileURLToPath(import.meta.url)), "check-public-content.mjs");
 
 const existsNever = { fileExists: () => false };
 const existsAlways = { fileExists: () => true };
@@ -67,6 +74,76 @@ test("references to files that are not public fail closed", () => {
 
 test("references to files that exist here stay legal", () => {
   assert.deepEqual(scanTextContent("dist/example.js", 'import "../httpClient.js";', existsAlways), []);
+});
+
+test("a candidate resolving outside the repository is never satisfied", () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  assert.equal(resolvesInsideRepository(resolve(root, "dist/cli.js")), true);
+  assert.equal(resolvesInsideRepository(resolve(root, "../private/secret.md")), false);
+  assert.equal(resolvesInsideRepository(resolve(root, "dist/../../private/secret.md")), false);
+  // The root itself is a directory, not a file a reference may name.
+  assert.equal(resolvesInsideRepository(root), false);
+  assert.equal(defaultFileExists("README.md", "../private/secret.md"), false);
+});
+
+test("an EXISTING sibling outside the repository still fails closed", () => {
+  // The dangerous case is not a missing file, it is a real one next door: a
+  // sync workspace has private checkouts as siblings, so a guard that only
+  // tests existence accepts the pointer precisely when the material is there.
+  const workspace = mkdtempSync(join(tmpdir(), "public-content-escape-"));
+  try {
+    mkdirSync(join(workspace, "public/scripts"), { recursive: true });
+    mkdirSync(join(workspace, "private"), { recursive: true });
+    writeFileSync(join(workspace, "private/secret.md"), "internal notes\n");
+    writeFileSync(join(workspace, "public/guide.md"), "See ../private/secret.md for details.\n");
+    copyFileSync(scannerPath, join(workspace, "public/scripts/check-public-content.mjs"));
+
+    let output = "";
+    let rejected = false;
+    try {
+      output = execFileSync("node", ["scripts/check-public-content.mjs"], {
+        cwd: join(workspace, "public"), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      rejected = true;
+      output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+    }
+    assert.ok(rejected, `expected rejection, scanner passed: ${output.trim()}`);
+    assert.match(output, /nonpublic-reference/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("a regex literal followed by a method call is not a path reference", () => {
+  const line = '|| (code === "invalid_state" && /plan digest has expired/i.test(detail));';
+  assert.deepEqual(scanTextContent("dist/cliGuidance.js", line, existsNever), []);
+  assert.deepEqual(scanTextContent("dist/cliGuidance.d.ts", line, existsNever), []);
+});
+
+test("a character class containing a slash is still not a path reference", () => {
+  assert.deepEqual(scanTextContent("dist/example.js", "const re = /[a-z/]+x.yz/g;", existsNever), []);
+});
+
+test("a genuine nonpublic reference in a code comment is still caught", () => {
+  onlyFailure(
+    scanTextContent("dist/example.js", "// derived from docs/DESIGN.md", existsNever),
+    "nonpublic-reference",
+  );
+});
+
+test("a genuine nonpublic reference beside a regex literal is still caught", () => {
+  onlyFailure(
+    scanTextContent("dist/example.js", '/expired/i.test(x); // per docs/DESIGN.md', existsNever),
+    "nonpublic-reference",
+  );
+});
+
+test("regex literals are not stripped outside code files", () => {
+  onlyFailure(
+    scanTextContent("README.md", "matched by /plan digest has expired/i.test", existsNever),
+    "nonpublic-reference",
+  );
 });
 
 test("bare 40-hex commit identifiers fail closed outside workflows", () => {
@@ -133,6 +210,28 @@ test("allowed public URLs stay legal", () => {
     "https://docs.getmillwork.dev",
   ].join(" ");
   assert.deepEqual(scanTextContent("README.md", sample, existsAlways), []);
+});
+
+test("the two customer destinations the CLI prints stay legal", () => {
+  const sample = "https://app.getmillwork.dev/keys https://app.getmillwork.dev/billing";
+  assert.deepEqual(scanTextContent("dist/cliGuidance.js", sample, existsAlways), []);
+});
+
+test("any other app subpath fails closed", () => {
+  onlyFailure(scanTextContent("README.md", "see https://app.getmillwork.dev/admin", existsAlways), "disallowed-url");
+  onlyFailure(scanTextContent("README.md", "see https://app.getmillwork.dev/keys/export", existsAlways), "disallowed-url");
+});
+
+test("app host lookalikes fail closed", () => {
+  onlyFailure(scanTextContent("README.md", "see https://app.getmillwork.dev.evil/keys", existsAlways), "disallowed-url");
+  onlyFailure(scanTextContent("README.md", "see https://notapp.getmillwork.dev/keys", existsAlways), "disallowed-url");
+});
+
+test("prose ending on a customer destination stays legal", () => {
+  assert.deepEqual(
+    scanTextContent("README.md", "Create a key at https://app.getmillwork.dev/keys.", existsAlways),
+    [],
+  );
 });
 
 test("source maps embedding source text fail closed", () => {

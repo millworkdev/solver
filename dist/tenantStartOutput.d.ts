@@ -1,6 +1,16 @@
-import type { Account, ExecutionResult, Receipt, TenantTemplateApplication } from "./types.js";
+import type { Account, ExecutionResult, Receipt, TenantTemplateApplication, TenantTemplatePlan } from "./types.js";
 export declare const TENANT_START_OUTPUT_VERSION = "millwork.tenant-start.v1";
 export declare function tenantStartIsInteractive(args: string[], stdinTTY: boolean, stdoutTTY: boolean): boolean;
+export declare function planCostSummary(plan: TenantTemplatePlan): string;
+/** Agents hand over a safe application ID; never copy approval URLs to chat. */
+export declare function browserHandoff(application: TenantTemplateApplication): {
+    type: string;
+    application_id: string;
+    command: string[];
+    expires_at: string | null;
+    detail: string;
+} | undefined;
+export declare function liveProofCostSummary(application: TenantTemplateApplication): string;
 /** Model output, API details and identifiers are data, never terminal commands. */
 export declare function terminalText(value: unknown, multiline?: boolean): string;
 export type CreditSummary = {
