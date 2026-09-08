@@ -126,16 +126,19 @@ export async function inspectCommand(command, solver, readAccount) {
         const catalog = await solver.modelCatalog.get();
         return { exitCode: 0, document: { ...catalog, schema_version: schemaVersion, read_only: true }, human: modelSummary(catalog) };
     }
+    const defaultApplicationKey = command.kind === "show" && command.templateId && !command.applicationKey
+        ? tenantStartKey(command.templateId, (await readAccount()).authenticated_principal_id ?? "")
+        : undefined;
     const lookups = command.applicationId ? [{ application_id: command.applicationId }]
         : command.templateId ? [{ template_id: command.templateId,
-                idempotency_key: command.applicationKey ?? tenantStartKey(command.templateId) }]
+                idempotency_key: command.applicationKey ?? defaultApplicationKey }]
             : [{ current_selection: true }];
     let applications;
     if (command.applicationId)
         applications = [await solver.tenantTemplates.get(command.applicationId)];
     else if (command.templateId) {
         const recovered = await solver.tenantTemplates.recover({ template_id: command.templateId,
-            idempotency_key: command.applicationKey ?? tenantStartKey(command.templateId) });
+            idempotency_key: command.applicationKey ?? defaultApplicationKey });
         applications = recovered.application ? [recovered.application] : [];
     }
     else {

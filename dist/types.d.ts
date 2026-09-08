@@ -782,6 +782,8 @@ export interface AccountBalance {
 }
 export interface Account {
     tenant_id: string;
+    /** Stable, non-secret identifier for this authenticated machine principal. */
+    authenticated_principal_id: string | null;
     display_name: string;
     quota_tier: string;
     is_demo: boolean;

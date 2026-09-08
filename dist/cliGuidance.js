@@ -22,14 +22,16 @@ export function safeErrorText(value) {
         }
     }).slice(0, 1200);
 }
+const EXPIRED_PLAN_DIGEST_DETAIL = /plan digest has expired/i;
+const STALE_PLAN_FIELD = /digest|issued_at/;
 export function cliApiError(error) {
     if (!(error instanceof SolverApiError))
         return null;
     const code = error.type.split("/").pop() ?? "request_failed";
     const knownCode = /^[a-z_]+$/.test(code) ? code : "request_failed";
     const fields = (error.errors ?? []).map(({ field, message }) => ({ field: safeErrorText(field), message: safeErrorText(message) }));
-    const stale = (knownCode === "validation_failed" && fields.some(({ field }) => /digest|issued_at/.test(field)))
-        || (knownCode === "invalid_state" && /plan digest has expired/i.test(error.detail ?? ""));
+    const stale = (knownCode === "validation_failed" && fields.some(({ field }) => STALE_PLAN_FIELD.test(field)))
+        || (knownCode === "invalid_state" && EXPIRED_PLAN_DIGEST_DETAIL.test(error.detail ?? ""));
     const model = knownCode === "validation_failed" && fields.some(({ field }) => field === "model_deployment_id");
     const next = stale
         ? { type: "refresh_plan", detail: "Request a fresh plan, review its current model, costs and effects, then approve the new digest. Do not retry the old digest.", url: `${START_DOCS_URL}#refresh-a-stale-plan` }
@@ -37,7 +39,11 @@ export function cliApiError(error) {
             ? { type: "choose_ready_model", detail: "Run millwork models list and choose a deployment available for this setup lane. Your current model was not replaced.", url: `${START_DOCS_URL}#model-not-ready-for-setup` }
             : knownCode === "insufficient_credit"
                 ? { type: "top_up_in_billing", detail: "Add credit in Billing, then inspect your saved application before approving a live run.", url: BILLING_URL }
-                : { type: "review_error", detail: "Review the reported fields before retrying. Keep the request ID if you need support.", url: "https://docs.getmillwork.dev/guides/errors-and-retries#fix-invalid-fields" };
+                : knownCode === "idempotency_conflict"
+                    ? { type: "review_request_key", detail: "Send the original body with this request key, or choose a new --idempotency-key for intentionally new work.", url: "https://docs.getmillwork.dev/guides/errors-and-retries#safe-retry-rules" }
+                    : knownCode === "permission_denied"
+                        ? { type: "review_credential_context", detail: "Follow the server detail and check that this credential belongs to the intended organization. Keep the request ID if you need support.", url: "https://docs.getmillwork.dev/help/account#why-was-my-api-key-rejected" }
+                        : { type: "review_error", detail: "Review the reported fields before retrying. Keep the request ID if you need support.", url: "https://docs.getmillwork.dev/guides/errors-and-retries#fix-invalid-fields" };
     return {
         state: "request_failed", error: knownCode, status: error.status,
         title: safeErrorText(error.message), ...(error.detail ? { detail: safeErrorText(error.detail) } : {}),

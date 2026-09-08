@@ -65,22 +65,6 @@ export const forbiddenPatterns = [
 // else points a permanent public reader at material that is not public.
 const pathReferencePattern = /(?:\.\.?\/)*[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+\.[A-Za-z]{1,5}\b/g;
 
-// A JavaScript regex literal whose closing delimiter is followed by flags and
-// a method call has the exact shape of a path reference: a phrase, a slash,
-// a short flag run, then a dot and a short word. This matches a literal
-// conservatively -- an
-// unescaped delimiter that cannot be division and cannot be a comment marker,
-// a body allowing escapes and character classes, a close and optional flags.
-// Failing to recognise one leaves today's behaviour, which is to fail closed.
-const regexLiteralPattern = /(?<![\w$)\]"'`\/*])\/(?![*\/])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^\/\\\n])+\/[dgimsuvy]*/g;
-const codeFilePattern = /\.(?:m|c)?[jt]s$/;
-
-// Blank literals to equal-length runs so match offsets stay aligned, and only
-// in code files, so Markdown and workflow scanning is unchanged.
-function textForPathScan(path, text) {
-  if (!codeFilePattern.test(path)) return text;
-  return text.replace(regexLiteralPattern, (literal) => " ".repeat(literal.length));
-}
 
 export function scanTextContent(path, raw, { fileExists = defaultFileExists } = {}) {
   const failures = [];
@@ -104,7 +88,7 @@ export function scanTextContent(path, raw, { fileExists = defaultFileExists } = 
     : text;
   const shaMatch = textWithoutActionPins.match(/\b[0-9a-f]{40}\b/);
   if (shaMatch) failures.push(`${path}: bare 40-hex commit identifier outside a workflow action pin (commit-identifier)`);
-  for (const reference of textForPathScan(path, text).match(pathReferencePattern) ?? []) {
+  for (const reference of text.match(pathReferencePattern) ?? []) {
     if (!fileExists(path, reference)) {
       failures.push(`${path}: reference to a file that is not public here (nonpublic-reference): ${reference}`);
     }

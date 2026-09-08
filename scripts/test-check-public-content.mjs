@@ -115,33 +115,56 @@ test("an EXISTING sibling outside the repository still fails closed", () => {
   }
 });
 
-test("a regex literal followed by a method call is not a path reference", () => {
-  const line = '|| (code === "invalid_state" && /plan digest has expired/i.test(detail));';
-  assert.deepEqual(scanTextContent("dist/cliGuidance.js", line, existsNever), []);
-  assert.deepEqual(scanTextContent("dist/cliGuidance.d.ts", line, existsNever), []);
-});
-
-test("a character class containing a slash is still not a path reference", () => {
-  assert.deepEqual(scanTextContent("dist/example.js", "const re = /[a-z/]+x.yz/g;", existsNever), []);
-});
-
-test("a genuine nonpublic reference in a code comment is still caught", () => {
+test("an inline regex literal with a method call is rejected, and naming it is the fix", () => {
+  // The scanner does not parse JavaScript, and a suffix cannot establish that it
+  // is looking at one: i.test, g.exec, gui.test and g.flags are all valid file
+  // names. So nothing is exempted. An inline literal emits bytes shaped exactly
+  // like a path, and the repair is to name the pattern where it is written.
   onlyFailure(
-    scanTextContent("dist/example.js", "// derived from docs/DESIGN.md", existsNever),
+    scanTextContent("dist/a.js", '/plan digest has expired/i.test(detail)', existsNever),
+    "nonpublic-reference",
+  );
+  assert.deepEqual(
+    scanTextContent("dist/a.js", "EXPIRED_PLAN_DIGEST_DETAIL.test(detail)", existsNever),
+    [],
+  );
+  // A literal that is not followed by a member access never had the shape.
+  assert.deepEqual(scanTextContent("dist/a.js", "const re = /[a-z]+x/g;", existsNever), []);
+});
+
+test("a reference whose name merely resembles regex flags is still checked", () => {
+  for (const line of [
+    "// See fixtures/i.test for details.",
+    'const fixture = "fixtures/g.exec";',
+    "// See tests/gui.test for details.",
+    'const fixture = "fixtures/g.flags";',
+  ]) {
+    onlyFailure(scanTextContent("dist/sample.js", line, existsNever), "nonpublic-reference");
+  }
+});
+
+test("relative references in code survive to be scanned", () => {
+  for (const line of [
+    "// See ./missing/note.md for details.",
+    'const note = "./missing/note.md";',
+    "// See ../outside/secret.md for details.",
+    'const note = "../outside/secret.md";',
+    "// See ../outside/i.test for details.",
+  ]) {
+    onlyFailure(scanTextContent("dist/sample.js", line, existsNever), "nonpublic-reference");
+  }
+});
+
+test("a genuine nonpublic reference beside a named pattern is still caught", () => {
+  onlyFailure(
+    scanTextContent("dist/example.js", 'EXPIRED.test(x); // per docs/DESIGN.md', existsNever),
     "nonpublic-reference",
   );
 });
 
-test("a genuine nonpublic reference beside a regex literal is still caught", () => {
+test("prose is scanned by the same rule, with nothing exempted", () => {
   onlyFailure(
-    scanTextContent("dist/example.js", '/expired/i.test(x); // per docs/DESIGN.md', existsNever),
-    "nonpublic-reference",
-  );
-});
-
-test("regex literals are not stripped outside code files", () => {
-  onlyFailure(
-    scanTextContent("README.md", "matched by /plan digest has expired/i.test", existsNever),
+    scanTextContent("README.md", "matched by phrase/i.test", existsNever),
     "nonpublic-reference",
   );
 });

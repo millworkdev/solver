@@ -1,7 +1,13 @@
 import type { TenantTemplatesResource } from "./resources/tenantTemplates.js";
 import type { TenantTemplateApplication, TenantTemplateId } from "./types.js";
-/** Stable, tenant-scoped server identity. No API-key hash or project file cache. */
-export declare function tenantStartKey(template: TenantTemplateId): string;
+/**
+ * Namespace a CLI-owned request key with the server's stable, non-secret
+ * authenticated-principal ID. API-key material, prefixes, and derivations never enter
+ * the header.
+ */
+export declare function principalScopedIdempotencyKey(principalId: string, operationKey: string): string;
+/** Stable setup identity within one tenant principal. */
+export declare function tenantStartKey(template: TenantTemplateId, principalId: string): string;
 export interface TenantStartProgressOptions {
     interactive: boolean;
     approveLive: (application: TenantTemplateApplication) => Promise<boolean>;
