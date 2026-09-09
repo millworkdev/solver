@@ -5,7 +5,9 @@ import type { SourceAuthScheme, SourceCredentialHandoffIntent, StartedSourceCred
  * NEVER carries a raw provider secret: `start` mints an intent whose
  * `continue_url` the human completes in a browser against the credential
  * broker, and `poll` observes the intent until it is `completed` -- the
- * resulting `handoff_intent_id` is what `sourceConnections.create` consumes.
+ * resulting `handoff_intent_id` and exact returned `source_scope` are what
+ * `sourceConnections.create` consumes. The scope is opaque connector metadata,
+ * not a provider account id the customer must discover or guess.
  */
 export declare class SourceCredentialHandoffsResource {
     private readonly http;

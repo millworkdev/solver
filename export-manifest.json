@@ -6,7 +6,7 @@
     "apply the private export recipe's single-line replacement table in order"
   ],
   "aggregate_digest_formula": "sha256 over the sorted lines '<sha256>  ./<path relative to dist>\\n' of every exported file",
-  "file_count": 66,
+  "file_count": 70,
   "files": [
     {
       "path": "dist/cli.d.ts",
@@ -14,7 +14,15 @@
     },
     {
       "path": "dist/cli.js",
-      "sha256": "852a54e84fe8c32b01609015267b5b2c0396af25ad500846d438518fc52e62cf"
+      "sha256": "ee5904fdd37559631408378f39c95e73ec20740ff7b691d350ac99f7b95a5e6b"
+    },
+    {
+      "path": "dist/cliByokSelection.d.ts",
+      "sha256": "752b5bd9268a6a132703cd2d5af84da9d6706012f6e0452873bcc1382b718c77"
+    },
+    {
+      "path": "dist/cliByokSelection.js",
+      "sha256": "064ec426742916a18b4d7f1e22d446b2e5435ed9c311135e940eff1a716099a9"
     },
     {
       "path": "dist/cliDiscovery.d.ts",
@@ -34,19 +42,27 @@
     },
     {
       "path": "dist/cliGuidance.d.ts",
-      "sha256": "7b21c654b215a50617970abbd1cf21f86bd77b07c9fc161df5e71ca7025e9ecb"
+      "sha256": "165f66670173f228d96ea663405b811e768e38d8f89cb93312c9118e257de4b9"
     },
     {
       "path": "dist/cliGuidance.js",
-      "sha256": "eab2f97846693fde8eff7387e2ef4d7c1fccb6a38bc7e78d0224cbf1ddf67906"
+      "sha256": "3eaea1a422316ff53831603a370693cfef4080026d5e68b35855d0ea5269255c"
     },
     {
       "path": "dist/cliInspection.d.ts",
-      "sha256": "a3327f5a74fef1d13a7612b0f5c4454cb24323a107d73ce3d438eebd458734b4"
+      "sha256": "250fedb322c52560fcb467a311bd5acc86918ee07169a7546515a6b5a849ca42"
     },
     {
       "path": "dist/cliInspection.js",
-      "sha256": "47e4eef2dac782aceba21b87605eb411604582d347a27981fcaf1dd16e1e6f51"
+      "sha256": "83369e89f9965ee8d784024f3e1b8cc4aa7854972c622b61cbd12c81efc36dc6"
+    },
+    {
+      "path": "dist/cliProviderLifecycle.d.ts",
+      "sha256": "1d8e6239901d6afb91cd29e3a2da0b9f52ea7ccbde45dab6f5e83041376d71c2"
+    },
+    {
+      "path": "dist/cliProviderLifecycle.js",
+      "sha256": "ce2370dd136c06480d4b0541a0c1717b9b99a3efa1dd8d14224dd4821c53ecfb"
     },
     {
       "path": "dist/cliQualification.d.ts",
@@ -194,11 +210,11 @@
     },
     {
       "path": "dist/resources/sourceCredentialHandoffs.d.ts",
-      "sha256": "510342690b731d6b9d2a55d510eab4f7a2fe76b90f4f0859fc9e329ddfc495e8"
+      "sha256": "59b68fdc6483ac015a58fb0c36cf01ee986c76d76ed755c93ccaf3f994de6f7d"
     },
     {
       "path": "dist/resources/sourceCredentialHandoffs.js",
-      "sha256": "5e3aeed253e941e723ffbc3ac67af6a1a79335275bffd3c0e23024cf925fd387"
+      "sha256": "58611251fd07f4fc7a2a2599a39caf9ac1bfc9b9d70826840830deac7f4bf7dd"
     },
     {
       "path": "dist/resources/tenants.d.ts",
@@ -210,7 +226,7 @@
     },
     {
       "path": "dist/resources/tenantTemplates.d.ts",
-      "sha256": "1b97ee336ea9e503ebad326fa2ddf3c37ad3df25a3dd72e85e619d046b03831c"
+      "sha256": "0ce0f525e3d487b22728aa61393025ca15b05cdf49eb3e8566f7bd1efefe23c1"
     },
     {
       "path": "dist/resources/tenantTemplates.js",
@@ -242,11 +258,11 @@
     },
     {
       "path": "dist/tenantConsentBrowser.d.ts",
-      "sha256": "112dc4d37a7bc335f751cab6aa679a7db2d872d0f792feace40377e3c2903ea3"
+      "sha256": "a06a3ba31e6db4660aca6dc23d1b16fbc86c08baa5f734fc5f019ddbd52360c5"
     },
     {
       "path": "dist/tenantConsentBrowser.js",
-      "sha256": "9bc7d71579f6ea7aad9af82f89f9db6462f89eabb47a2c3a5bb204aca41a1c99"
+      "sha256": "f2ee0227ecd48238b00fa8584409850820434941672e8b1ef6cc20236ceb8394"
     },
     {
       "path": "dist/tenantStartFlow.d.ts",
@@ -258,20 +274,20 @@
     },
     {
       "path": "dist/tenantStartOutput.d.ts",
-      "sha256": "56758b1d2cb7effe50b0ffdbf70c11f1403ebbb683cb26f1f5d2a0bbe67cd0e9"
+      "sha256": "745b0222b6db601c354590adb79b758ee35cb124eb7702d5293ea48b6e3712aa"
     },
     {
       "path": "dist/tenantStartOutput.js",
-      "sha256": "e9fe5ff746d5133f2ca0e06e648facf1848743fd8aae0fbd3b11ea852b8c150d"
+      "sha256": "6b624fbfa40e455ca08613c02eae92e25b4adff008ce52d926a42cb1c287edb2"
     },
     {
       "path": "dist/types.d.ts",
-      "sha256": "411e352fc5b6875603120592e11031ddb032f469fed893b38c04bbf5cff491d8"
+      "sha256": "03600265dd87c7af818b13dfbc56c384b7f104d297f2a9747282be1572ec4547"
     },
     {
       "path": "dist/types.js",
       "sha256": "c29d3594690c781e06590537a3dc7852b31e54b19a7f3deb585a1b381a89afb4"
     }
   ],
-  "aggregate_sha256": "5cb39518c6745f526e83192e7bc9151c86cd9ffb249d242b1ac1c98950e9fc75"
+  "aggregate_sha256": "16ac0ec778d22c28720f9433dc8df5bdd24082c6968405e966b0c8c1e199a264"
 }

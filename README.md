@@ -19,35 +19,48 @@ Start the complete terminal setup with one command:
 npx --yes @millwork/solver tenant start
 ```
 
-`millwork doctor` checks the local Node, API base, and API-key configuration
-without printing the credential. `millwork tenant start` inspects a plan before
-any application or paid execution is approved.
+First [configure your organization's Millwork API key](https://docs.getmillwork.dev/get-started/tenant-start#configure-your-api-key)
+as `SOLVERAPI_API_KEY` in the terminal where you will run Millwork. Reuse a key
+you saved or create one in [API keys](https://app.getmillwork.dev/keys).
+`millwork doctor --json` checks this terminal without contacting the API.
+A passing local check does not verify the key or account access.
 
-Set `SOLVERAPI_API_KEY` to your organization's Millwork API key before starting;
-do not put the key in command-line arguments. The hosted path supplies provider
-access. To connect your own provider account, add `--template byok-open-model`:
-the command opens your browser and waits for approval, then continues in the
-same terminal. You never paste a provider key or authorization code there.
+To use your own provider account, add `--template byok-open-model` to the
+setup command. Choose from the providers and models offered to your
+organization. OpenRouter uses browser approval; other enabled providers use
+Millwork's private key-entry page. Keep provider keys and approval codes out
+of the terminal and conversation. Return to the terminal where you started.
 
-If approval fails or expires, the interactive command offers one explicit fresh
-approval on the same saved setup. Declining makes no new connection or paid
-request. JSON and headless output never prompts or retries consent implicitly.
-The command prints its recovery command and retains a completed result/receipt;
-recovery does not repeat that paid run. Current access and release guidance is
-available through `millwork docs`.
+Review each plan's effects, model, payer, platform fee, model budget and time
+limit. A funded Millwork-model plan can include the free test and paid run in
+one approval. Connecting your own provider account asks separately before
+its paid run. A model call already running can exceed its budget.
 
-After setup, `millwork tenant show` reports the current proved model and preset.
-Use `millwork models list`, `models use`, and `models add` to inspect or change
-models; a replacement becomes current only after its test run passes. Use
-`millwork run --preset <id> --objective "<task>"` for the next task. Model,
-provider, verifier, and paid-run changes ask before they mutate or spend.
+Keep the application ID and the printed inspection and continuation commands.
+Use inspection to read progress and continuation when you are ready to proceed.
+If the browser cannot open here, use the private link on your browser device.
+The [CLI guide](https://docs.getmillwork.dev/get-started/tenant-start) covers
+expired links, interrupted setup, funding and failed runs. A completed setup
+retains its answer and receipt; continuing it does not repeat the paid run.
 
-`--version` reports the installed version, not the registry's current tags.
-Its JSON report and `doctor` link to current support information instead of
-embedding a public-availability claim that could become stale. These two reports
-use schema version 2: `support_information_url` replaces the old
-`supported_public_version` and `public_cli_available` fields. The `docs` report
-and tenant-setup output keep their existing schemas.
+With the CLI installed, `millwork provider list` reads available providers
+separately from existing connections. `provider connect <source-id>` starts
+the guided journey and may reuse a connection. `provider rotate <connection-id>`
+checks replacement access before switching. `provider disconnect <connection-id>`
+shows affected models before disabling that connection and scheduling saved-key
+removal. Follow [provider connection guidance](https://docs.getmillwork.dev/guides/connect-a-source)
+for returned IDs, confirmations and recovery.
+
+After setup, `millwork tenant show` reports the selected model and preset.
+Use that preset with `millwork run --preset <id> --objective "<task>"` for
+another task. To change models, read `millwork models list` and use the model
+key and deployment ID from one row. Review the provider, payer and any paid
+test before approving; a failed replacement preserves the prior selection.
+
+`millwork --version --json` reports the installed version; `millwork docs`
+links to the current guides. Read [API, SDK and MCP](https://docs.getmillwork.dev/guides/api-sdk-mcp)
+for the available interfaces. A provider named in an example is not
+necessarily available to your organization.
 
 ## Smallest working example
 
@@ -93,8 +106,10 @@ already carry a caller-owned idempotency key.
 
 ## Optional: tenant bootstrap
 
-`bootstrapTenant` creates a tenant and first API key. Use it after the
-quickstart, not as the first line.
+`bootstrapTenant` creates a tenant and first API key in environments where
+that provisioning route is enabled. For the hosted service, obtain your
+organization's access and key through the dashboard. This function is not
+an alternative when a local key is missing.
 
 ```ts
 import { bootstrapTenant } from "@millwork/solver";

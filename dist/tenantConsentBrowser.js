@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { win32 } from "node:path";
 import { hostedConsentUrl } from "./tenantStartFlow.js";
-import { terminalText } from "./tenantStartOutput.js";
+import { terminalText, providerConsentAction } from "./tenantStartOutput.js";
 // Browser helpers must not inherit the Solver credential, NODE_OPTIONS or a
 // caller's shell-valued BROWSER override. Only desktop/session settings pass.
 function desktopEnvironment(environment) {
@@ -69,10 +69,44 @@ export async function openConsentBrowser(url, runtime = {}) {
         }
     });
 }
-/** Presentation only: the existing application/resume API owns all progress. */
-export function createConsentPresenter(options) {
+/** Shared browser presentation for a server-owned setup or rotation handoff. */
+export async function presentProviderConsent(input, options) {
+    if (!options.interactive && !options.explicitOpenBrowser)
+        return;
+    const parsed = new URL(input.url);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash
+        || input.url.length > 4096 || /\s|[\u0000-\u001f\u007f-\u009f]/u.test(input.url)
+        || !Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.now()) {
+        throw new Error("The provider setup link is invalid or expired. No browser was opened.");
+    }
     const environment = options.environment ?? process.env;
     const platform = options.platform ?? process.platform;
+    const write = (value) => options.write(terminalText(value, true));
+    const remote = Boolean(environment.SSH_CONNECTION || environment.SSH_CLIENT || environment.SSH_TTY);
+    const automated = Boolean(environment.CI && !["0", "false"].includes(environment.CI.toLowerCase()));
+    const noDesktop = platform === "linux" && !environment.DISPLAY && !environment.WAYLAND_DISPLAY;
+    if (options.noBrowser || remote || automated || noDesktop) {
+        write("Browser opening skipped for this terminal. Open the consent link on your browser device.\n");
+    }
+    else {
+        write("Opening your browser to connect your provider account…\n");
+        let result;
+        try {
+            result = await (options.openBrowser ?? ((url) => openConsentBrowser(url, { platform, environment })))(input.url);
+        }
+        catch {
+            result = "failed";
+        }
+        if (result !== "requested")
+            write("Could not confirm browser launch. Use the link below; this setup is still waiting.\n");
+    }
+    write(`Open this short-lived link if needed (on another device if this terminal is remote):\n${input.url}\n`);
+    write(`${providerConsentAction(input.sourceId).detail}\nConsent link expires ${terminalText(input.expiresAt)}. ${options.interactive
+        ? "Waiting for approval; keep this command running. Setup continues automatically when consent is received."
+        : "Return to the saved continuation command after completing the browser step. No polling or paid approval was performed."}\nDo not paste a provider key or authorization code into this terminal. Connecting access does not approve a paid run.\n`);
+}
+/** Presentation only: the existing application/resume API owns all progress. */
+export function createConsentPresenter(options) {
     let waitingApplication;
     const presented = new Set();
     // Keep our authored line structure (including the standalone fallback URL),
@@ -80,7 +114,7 @@ export function createConsentPresenter(options) {
     const write = (message) => options.write(terminalText(message, true));
     return {
         async presentConsent(application, suppliedUrl) {
-            if (!options.interactive)
+            if (!options.interactive && !options.explicitOpenBrowser)
                 return;
             const url = hostedConsentUrl(application);
             if (!url || url !== suppliedUrl || application.diagnostics.access_lane !== "byok"
@@ -94,26 +128,8 @@ export function createConsentPresenter(options) {
                 return;
             presented.add(identity);
             waitingApplication = application.application_id;
-            const remote = Boolean(environment.SSH_CONNECTION || environment.SSH_CLIENT || environment.SSH_TTY);
-            const automated = Boolean(environment.CI && !["0", "false"].includes(environment.CI.toLowerCase()));
-            const noDesktop = platform === "linux" && !environment.DISPLAY && !environment.WAYLAND_DISPLAY;
-            if (options.noBrowser || remote || automated || noDesktop) {
-                write("Browser opening skipped for this terminal. Open the consent link on your browser device.\n");
-            }
-            else {
-                write("Opening your browser to connect your provider account…\n");
-                let result;
-                try {
-                    result = await (options.openBrowser ?? ((value) => openConsentBrowser(value, { platform, environment })))(url);
-                }
-                catch {
-                    result = "failed";
-                }
-                if (result !== "requested")
-                    write("Could not confirm browser launch. Use the link below; this setup is still waiting.\n");
-            }
-            write(`Open this short-lived link if needed (on another device if this terminal is remote):\n${url}\n`);
-            write(`In the browser, sign in and approve the provider connection, then return to this terminal.\nConsent link expires ${terminalText(application.consent.expires_at)}. Waiting for approval; keep this command running. Setup continues automatically when consent is received.\nDo not paste a provider key or authorization code into this terminal. Connecting the account does not authorize a paid model run; live execution requires separate approval after Echo.\n`);
+            await presentProviderConsent({ sourceId: application.diagnostics.source_id, url,
+                expiresAt: application.consent.expires_at }, options);
         },
         progress(application) {
             if (options.interactive && application.application_id === waitingApplication
