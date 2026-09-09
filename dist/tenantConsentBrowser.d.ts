@@ -13,11 +13,18 @@ export declare function openConsentBrowser(url: string, runtime?: BrowserRuntime
 interface ConsentPresenterOptions {
     interactive: boolean;
     noBrowser: boolean;
+    explicitOpenBrowser?: boolean;
     write: (message: string) => void;
     environment?: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
     openBrowser?: (url: string) => Promise<BrowserResult>;
 }
+/** Shared browser presentation for a server-owned setup or rotation handoff. */
+export declare function presentProviderConsent(input: {
+    sourceId: unknown;
+    url: string;
+    expiresAt: string;
+}, options: ConsentPresenterOptions): Promise<void>;
 /** Presentation only: the existing application/resume API owns all progress. */
 export declare function createConsentPresenter(options: ConsentPresenterOptions): {
     presentConsent(application: TenantTemplateApplication, suppliedUrl: string): Promise<void>;

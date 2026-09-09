@@ -10,6 +10,9 @@ import { qualificationFromApiError, qualificationFromPlan, qualifyMissingCredent
 import { POOL_STARTER_CONFIG_PATH, STARTER_CONFIG_PATH, STARTER_ECHO_EXAMPLE_PATH, STARTER_POOL_EXAMPLE_PATH, writeApprovedScaffold, } from "./starterScaffold.js";
 import { principalScopedIdempotencyKey, progressTenantStart, tenantStartKey } from "./tenantStartFlow.js";
 import { createConsentPresenter } from "./tenantConsentBrowser.js";
+import { hostedConsentUrl } from "./tenantStartFlow.js";
+import { planByokChoice, byokChoice, assertRecoveredByokChoice } from "./cliByokSelection.js";
+import { resolveProviderLifecycleCommand, runProviderLifecycle, providerLifecycleSummary, ProviderInspectionError } from "./cliProviderLifecycle.js";
 import { applicationSummary, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
 const cliArgs = process.argv.slice(2);
 const interactive = tenantStartIsInteractive(cliArgs, Boolean(input.isTTY), Boolean(output.isTTY));
@@ -80,6 +83,7 @@ async function applyApprovedPlan(solver, plan, write, idempotencyKey) {
         ...(plan.model_deployment_id
             ? { model_deployment_id: plan.model_deployment_id }
             : {}),
+        ...(plan.byok_offering || plan.byok_source ? { byok_offering: plan.byok_offering ?? byokChoice(plan.byok_source) } : {}),
         write,
     }, { idempotencyKey: `tenant-apply:${createHash("sha256").update(JSON.stringify([idempotencyKey, plan.digest])).digest("hex")}` });
     await maybeWriteScaffold(plan, write);
@@ -94,10 +98,32 @@ async function confirm(question) {
         rl.close();
     }
 }
+async function chooseByokOffering(offerings) {
+    process.stderr.write("Choose your provider and model. Your provider bills model usage; Millwork charges its displayed live-run fee.\n");
+    offerings.forEach((item, index) => process.stderr.write(`${index + 1}. ${terminalText(item.source_id)} — ${terminalText(item.model_key)} (${terminalText(item.served_variant_id)})\n`));
+    const rl = createInterface({ input, output: process.stderr });
+    try {
+        const answer = (await rl.question("Choice number (Enter to cancel): ")).trim();
+        if (!answer)
+            return undefined;
+        const index = Number(answer) - 1;
+        if (!/^\d+$/.test(answer) || !Number.isSafeInteger(index) || index < 0 || index >= offerings.length) {
+            throw new InspectionUsageError("Choose one listed number. No provider was selected or connected.");
+        }
+        return offerings[index];
+    }
+    finally {
+        rl.close();
+    }
+}
 async function finishApplication(solver, initial) {
     let previous = "";
     const consent = createConsentPresenter({ interactive, noBrowser: hasFlag(cliArgs, "--no-browser"),
+        explicitOpenBrowser: hasFlag(cliArgs, "--open-browser"),
         write: (message) => { process.stderr.write(message); } });
+    const initialUrl = hostedConsentUrl(initial);
+    if (!interactive && hasFlag(cliArgs, "--open-browser") && initialUrl)
+        await consent.presentConsent(initial, initialUrl);
     const application = await progressTenantStart(solver.tenantTemplates, initial, {
         interactive,
         presentConsent: consent.presentConsent,
@@ -235,7 +261,7 @@ async function runModelUse(solver, args) {
             ?? await defaultRequestKey(solver, `tenant-model-use:${row.deployment.model_deployment_id}`),
         approvalQuestion: (plan) => templateId === "byok-open-model"
             ? "Connect this customer-owned route, prove the exact new arm, and select it only after success? [y/N] "
-            : `Prove this exact hosted arm up to USD ${plan.maximum_spend_usd} and select it only after success? [y/N] `,
+            : `Test this exact hosted arm with a spending allowance of USD ${plan.maximum_spend_usd} and select it only after success? An in-flight model call can exceed its budget. [y/N] `,
     });
 }
 async function runModelAdd(solver, args) {
@@ -367,7 +393,7 @@ async function runExecution(solver, args) {
         budget_note: "Model budget is a stop threshold, not a final quote; an in-flight call can exceed it." };
     if (interactive)
         process.stderr.write(`Model: ${terminalText(costReview.model_key ?? "not available")}\nProvider: ${terminalText(costReview.source_id ?? "not available")}\nLane: ${terminalText(costReview.access_lane ?? "not available")}\nData classes: ${costReview.data_classes.map(value => terminalText(value)).join(", ")}\nRuntime limit: ${costReview.max_runtime_s}s\nMillwork platform fee: ${fee === undefined ? "unavailable; review Billing" : `USD ${fee}`}\nModel usage budget: USD ${costReview.model_budget_usd} (${costReview.model_usage_payer})\nCombined allowance: ${costReview.combined_allowance_usd === null ? "unavailable" : `USD ${costReview.combined_allowance_usd}`}\n${costReview.budget_note}\n`);
-    if (!hasFlag(args, "--yes") && (!interactive || !await confirm(`Run exact arm ${armId} with maximum model spend USD ${policy.budget.max_cost_usd} and ${policy.budget.max_runtime_s}s runtime? [y/N] `))) {
+    if (!hasFlag(args, "--yes") && (!interactive || !await confirm(`Run exact arm ${armId} with a model budget of USD ${policy.budget.max_cost_usd} and ${policy.budget.max_runtime_s}s runtime? An in-flight model call can exceed its budget. [y/N] `))) {
         process.stdout.write(interactive ? "cancelled\n" : `${JSON.stringify({ state: "action_required", cost_review: costReview,
             next_action: { type: "approve_run", detail: "Review this exact model, provider, lane, data classes, runtime limit and costs with the user. Only after spending approval, rerun with --yes. --json is output formatting, not spending permission." } })}\n`);
         if (!interactive)
@@ -400,7 +426,14 @@ async function runExecution(solver, args) {
         process.exitCode = 1;
 }
 async function main() {
-    const args = cliArgs;
+    // The provider command is the same durable tenant journey, not another state machine.
+    const connecting = cliArgs[0] === "provider" && cliArgs[1] === "connect";
+    if (connecting && (!cliArgs[2] || cliArgs[2].startsWith("--")))
+        throw new InspectionUsageError("usage: millwork provider connect <source-id>. Run millwork provider list for available providers.");
+    const args = connecting ? ["tenant", "start", "--template", "byok-open-model", "--source-id", cliArgs[2], ...cliArgs.slice(3)] : cliArgs;
+    if (args.includes("--open-browser") && args.includes("--no-browser"))
+        throw new InspectionUsageError("Choose --open-browser or --no-browser, not both.");
+    const providerLifecycle = resolveProviderLifecycleCommand(args);
     const discovery = resolveDiscoveryCommand(args);
     if (discovery) {
         process[discovery.stream].write(`${discovery.text}\n`);
@@ -428,15 +461,16 @@ async function main() {
         || args[0] === "run"
         || (args[0] === "provider" && args[1] === "connect")
         || (args[0] === "verifier" && args[1] === "attach");
-    if (!tenantStart && !reconfiguration) {
-        process.stderr.write("usage: millwork <docs|doctor|--version|models list|models use <catalog-model>|models add <catalog-model>|arms disable <arm-id>|run --preset <id> --objective <task>|provider connect openrouter|verifier attach --endpoint <url> --auth-ref <handle>|tenant show|tenant start> [options]\n");
+    if (!tenantStart && !reconfiguration && !providerLifecycle) {
+        process.stderr.write("usage: millwork <docs|doctor|--version|models list|models use <catalog-model>|models add <catalog-model>|arms disable <arm-id>|run --preset <id> --objective <task>|provider list|provider connect <source-id>|provider rotate <connection-id>|provider disconnect <connection-id>|verifier attach --endpoint <url> --auth-ref <handle>|tenant show|tenant start> [options]\n");
         process.exit(2);
     }
     if (tenantStart) {
-        const booleanFlags = new Set(["--write", "--plan", "--json", "--no-browser"]);
+        const booleanFlags = new Set(["--write", "--plan", "--json", "--no-browser", "--open-browser"]);
         const valueFlags = new Set([
             "--template",
             "--model-deployment-id",
+            "--source-id", "--served-variant-id",
             "--digest",
             "--issued-at",
             "--idempotency-key",
@@ -444,8 +478,12 @@ async function main() {
             "--resume-action",
             "--live-proof-digest",
         ]);
+        const seen = new Set();
         for (let index = 2; index < args.length; index += 1) {
             const argument = args[index];
+            if (seen.has(argument))
+                throw new InspectionUsageError(`Duplicate argument: ${terminalText(argument)}`);
+            seen.add(argument);
             if (booleanFlags.has(argument))
                 continue;
             if (valueFlags.has(argument)) {
@@ -469,6 +507,17 @@ async function main() {
         apiKey: process.env.SOLVERAPI_API_KEY,
         baseUrl: process.env.SOLVERAPI_BASE_URL ?? DEFAULT_API_BASE_URL,
     });
+    if (providerLifecycle) {
+        const document = await runProviderLifecycle(solver, providerLifecycle, { interactive, confirm,
+            write: message => process.stderr.write(terminalText(message, true)) });
+        if (interactive)
+            process.stdout.write(terminalText(providerLifecycleSummary(document), true));
+        else
+            emitJson(document);
+        if (document.state === "action_required")
+            process.exitCode = 2;
+        return;
+    }
     if (args[0] === "models" && args[1] === "use")
         return runModelUse(solver, args);
     if (args[0] === "models" && args[1] === "add")
@@ -479,24 +528,13 @@ async function main() {
         return runExecution(solver, args);
     if (args[0] === "verifier" && args[1] === "attach")
         return runVerifierAttach(solver, args);
-    if (args[0] === "provider" && args[1] === "connect") {
-        assertCommandFlags(args, 3, new Set(["--json", "--no-browser"]), new Set(["--model-deployment-id", "--idempotency-key"]));
-        if (args[2] !== "openrouter") {
-            throw new InspectionUsageError("OpenRouter is the only available customer-owned connector. Provider-neutral browser presentation does not imply other connectors.");
-        }
-        await runPlannedModelApplication(solver, {
-            templateId: "byok-open-model",
-            modelDeploymentId: flagValue(args, "--model-deployment-id"),
-            applicationKey: flagValue(args, "--idempotency-key")
-                ?? tenantStartKey("byok-open-model", await authenticatedPrincipalId(solver)),
-            approvalQuestion: () => "Open OpenRouter consent, test and sync the connection, prove its exact arm, then select it after success? [y/N] ",
-        });
-        return;
-    }
     const applicationId = flagValue(args, "--application-id");
     const resumeAction = flagValue(args, "--resume-action");
     const idempotencyKey = flagValue(args, "--idempotency-key");
     const liveProofDigest = flagValue(args, "--live-proof-digest");
+    const sourceId = flagValue(args, "--source-id");
+    const servedVariantId = flagValue(args, "--served-variant-id");
+    const byokFilter = { ...(sourceId ? { sourceId } : {}), ...(servedVariantId ? { servedVariantId } : {}) };
     if (applicationId || resumeAction || liveProofDigest) {
         const allowedResumeActions = new Set([
             "poll_consent",
@@ -508,7 +546,9 @@ async function main() {
             "refresh_byok_readiness",
         ]);
         if (applicationId && !resumeAction && !liveProofDigest) {
-            await finishApplication(solver, await solver.tenantTemplates.get(applicationId));
+            const saved = await solver.tenantTemplates.get(applicationId);
+            assertRecoveredByokChoice(saved, byokFilter);
+            await finishApplication(solver, saved);
             return;
         }
         if (!applicationId || !resumeAction || !allowedResumeActions.has(resumeAction) || !idempotencyKey) {
@@ -519,6 +559,8 @@ async function main() {
             process.stderr.write("--live-proof-digest is required only for authorize_live_proof\n");
             process.exit(2);
         }
+        if (sourceId || servedVariantId)
+            assertRecoveredByokChoice(await solver.tenantTemplates.get(applicationId), byokFilter);
         const application = await solver.tenantTemplates.resume(applicationId, {
             action: resumeAction,
             ...(liveProofDigest ? { live_proof_digest: liveProofDigest } : {}),
@@ -533,7 +575,14 @@ async function main() {
         process.exit(2);
     }
     const templateId = templateValue;
-    const applicationKey = idempotencyKey ?? tenantStartKey(templateId, await authenticatedPrincipalId(solver));
+    if ((sourceId || servedVariantId) && templateId !== "byok-open-model")
+        throw new InspectionUsageError("Provider/model choices require --template byok-open-model.");
+    if (servedVariantId && !sourceId)
+        throw new InspectionUsageError("--served-variant-id requires --source-id.");
+    const defaultApplicationKey = idempotencyKey ? undefined : tenantStartKey(templateId, await authenticatedPrincipalId(solver));
+    const applicationKey = idempotencyKey ?? (sourceId
+        ? `${defaultApplicationKey}:${createHash("sha256").update(JSON.stringify(byokFilter)).digest("hex")}`
+        : defaultApplicationKey);
     const modelDeploymentId = flagValue(args, "--model-deployment-id");
     const planInput = {
         template_id: templateId,
@@ -547,11 +596,14 @@ async function main() {
             process.exit(2);
         }
         if (digest && issuedAt) {
+            if (sourceId && !servedVariantId && !modelDeploymentId)
+                throw new InspectionUsageError("Applying a provider-specific plan requires its exact --served-variant-id from --plan --json.");
             const application = await applyApprovedPlan(solver, {
                 digest,
                 issued_at: issuedAt,
                 template_id: templateId,
                 ...(modelDeploymentId ? { model_deployment_id: modelDeploymentId } : {}),
+                ...(sourceId && servedVariantId ? { byok_offering: { source_id: sourceId, served_variant_id: servedVariantId, auth_scheme: "api_key" } } : {}),
                 qualification: { state: "approved", next_action: { type: "approve_plan", detail: "" } },
                 blockers: [],
                 alternative_plans: [],
@@ -566,6 +618,7 @@ async function main() {
         }
         const recovered = await solver.tenantTemplates.recover({ template_id: templateId, idempotency_key: applicationKey });
         if (recovered.application) {
+            assertRecoveredByokChoice(recovered.application, byokFilter);
             if (modelDeploymentId && recovered.application.selected_model_deployment_id !== modelDeploymentId) {
                 throw new Error("The recovered application has a different deployment. Review a new explicit plan; the CLI will not silently change its model.");
             }
@@ -576,12 +629,25 @@ async function main() {
             return;
         }
         if (!interactive) {
+            if (templateId === "byok-open-model") {
+                const plan = await planByokChoice(solver.tenantTemplates, { ...byokFilter, modelDeploymentId });
+                emitJson({ state: "action_required", plan,
+                    next_action: { type: "approve_plan", detail: "Choose one offered provider/model, then review --plan --json with --source-id and --served-variant-id. Apply its exact --digest and --issued-at only after approval. No connection or paid run was started." } });
+                process.exitCode = 2;
+                return;
+            }
             emitJson({ state: "action_required", next_action: {
                     type: "approve_plan", detail: "Run --plan --json, review its effects and digest, then apply with --digest and --issued-at. No application was created."
                 } });
             process.exit(2);
         }
-        const plan = await solver.tenantTemplates.plan(planInput);
+        const plan = templateId === "byok-open-model"
+            ? await planByokChoice(solver.tenantTemplates, { ...byokFilter, modelDeploymentId }, chooseByokOffering)
+            : await solver.tenantTemplates.plan(planInput);
+        if (!plan) {
+            process.stdout.write("cancelled\n");
+            return;
+        }
         const blocked = qualificationFromPlan(plan);
         if (blocked)
             emitQualification(blocked);
@@ -592,7 +658,7 @@ async function main() {
         }
         const approved = await confirm(plan.template_id === "pooled-open-model"
             ? plan.effects?.some((effect) => effect.id === "submit_bounded_live_proof")
-                ? `Authorize this exact pooled live proof up to USD ${plan.maximum_spend_usd}? [y/N] `
+                ? `Authorize this exact pooled live proof with a spending allowance of USD ${plan.maximum_spend_usd}? An in-flight model call can exceed its budget. [y/N] `
                 : "Run this exact-arm Echo only, with zero provider calls, and stop for Billing top-up? This does not authorize live spend. [y/N] "
             : plan.template_id === "byok-open-model"
                 ? "Start this exact hosted customer-owned consent application? No provider key is entered in the CLI and no live request is submitted. [y/N] "
@@ -617,6 +683,8 @@ async function main() {
     }
 }
 main().catch((error) => {
+    if (error instanceof ProviderInspectionError)
+        emitQualification(error.qualification);
     const qualification = qualificationFromApiError(error);
     if (qualification)
         emitQualification(qualification);

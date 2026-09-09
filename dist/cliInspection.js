@@ -2,6 +2,7 @@ import { SolverApiError } from "./errors.js";
 import { qualificationFromApiError } from "./cliQualification.js";
 import { tenantStartKey } from "./tenantStartFlow.js";
 import { readCreditSummary, terminalText, TENANT_START_OUTPUT_VERSION } from "./tenantStartOutput.js";
+import { planByokChoice } from "./cliByokSelection.js";
 const templateIds = ["pooled-open-model", "byok-open-model", "starter"];
 export class InspectionUsageError extends Error {
 }
@@ -13,7 +14,7 @@ export function resolveInspectionCommand(args) {
     if (!kind)
         return null;
     const booleans = new Set(kind === "plan" ? ["--json", "--dry-run", "--plan"] : ["--json"]);
-    const values = new Set(kind === "plan" ? ["--template", "--model-deployment-id"]
+    const values = new Set(kind === "plan" ? ["--template", "--model-deployment-id", "--source-id", "--served-variant-id"]
         : kind === "show" ? ["--template", "--application-id", "--idempotency-key"] : []);
     const flags = new Map();
     for (let index = 2; index < args.length; index += 1) {
@@ -40,8 +41,13 @@ export function resolveInspectionCommand(args) {
     }
     if (kind === "models")
         return { kind };
+    if ((flags.has("--source-id") || flags.has("--served-variant-id")) && template !== "byok-open-model") {
+        throw new InspectionUsageError("Provider/model choices require --template byok-open-model.");
+    }
     if (kind === "plan")
         return { kind, templateId: (template ?? "pooled-open-model"),
+            ...(flags.has("--source-id") ? { sourceId: flags.get("--source-id") } : {}),
+            ...(flags.has("--served-variant-id") ? { servedVariantId: flags.get("--served-variant-id") } : {}),
             ...(flags.has("--model-deployment-id") ? { modelDeploymentId: flags.get("--model-deployment-id") } : {}) };
     if (flags.has("--application-id") && (template || flags.has("--idempotency-key"))) {
         throw new InspectionUsageError("Use --application-id alone, or --template with an optional --idempotency-key; do not mix lookup identities.");
@@ -61,14 +67,17 @@ export function inspectionQualification(command, qualification) {
     return { exitCode: 1, document: { ...qualification, schema_version: inspectionVersion(command), read_only: true },
         human: `Inspection unavailable — ${terminalText(qualification.state)}.\nNext: ${terminalText(qualification.next_action.detail)}\n` };
 }
-export function inspectionApiError(command, error) {
+export function readQualificationFromApiError(error) {
     // Reading a setup/catalog must not tell a reader to obtain write authority.
     if (error instanceof SolverApiError && error.status === 403)
-        return inspectionQualification(command, {
+        return {
             state: "role_lacks_permission", next_action: { type: "ask_owner_for_read_access",
-                detail: "This credential cannot read the requested resource. Ask your tenant owner to check read access; no write permission is requested." },
-        });
-    const qualification = qualificationFromApiError(error);
+                detail: "This key cannot read the requested information. Ask your organization owner to check read access; no write permission is requested. Help: https://docs.getmillwork.dev/help/account#why-was-my-api-key-rejected" },
+        };
+    return qualificationFromApiError(error);
+}
+export function inspectionApiError(command, error) {
+    const qualification = readQualificationFromApiError(error);
     return qualification ? inspectionQualification(command, qualification) : null;
 }
 function planSummary(plan) {
@@ -114,8 +123,9 @@ function modelSummary(catalog) {
 export async function inspectCommand(command, solver, readAccount) {
     const schemaVersion = inspectionVersion(command);
     if (command.kind === "plan") {
-        const plan = await solver.tenantTemplates.plan({ template_id: command.templateId,
-            ...(command.modelDeploymentId ? { model_deployment_id: command.modelDeploymentId } : {}) });
+        const plan = command.templateId === "byok-open-model" ? (await planByokChoice(solver.tenantTemplates, command))
+            : await solver.tenantTemplates.plan({ template_id: command.templateId,
+                ...(command.modelDeploymentId ? { model_deployment_id: command.modelDeploymentId } : {}) });
         // Retain the full plan even when blocked; callers need exact blockers/effects,
         // not only a qualification summary. A blocked preview still exits nonzero.
         const blocked = plan.qualification.state !== "approved" || plan.blockers.length > 0;

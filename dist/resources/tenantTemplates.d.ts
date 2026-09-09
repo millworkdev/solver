@@ -12,11 +12,13 @@ export declare class TenantTemplatesResource {
             blockers: TenantTemplatePlan["blockers"];
             alternative_plans: TenantTemplatePlan["alternative_plans"];
             catalog_row: TenantTemplatePlan["catalog_row"];
+            byok_offerings?: TenantTemplatePlan["byok_offerings"];
         }>;
     }>;
     plan(input?: {
         template_id?: TenantTemplateId;
         model_deployment_id?: string;
+        byok_offering?: Pick<NonNullable<TenantTemplatePlan["byok_source"]>, "source_id" | "auth_scheme" | "served_variant_id">;
     }): Promise<TenantTemplatePlan>;
     apply(input: {
         digest: string;
@@ -25,6 +27,7 @@ export declare class TenantTemplatesResource {
         issued_at: string;
         template_id?: TenantTemplateId;
         model_deployment_id?: string;
+        byok_offering?: Pick<NonNullable<TenantTemplatePlan["byok_source"]>, "source_id" | "auth_scheme" | "served_variant_id">;
         write?: boolean;
     }, opts: {
         idempotencyKey: string;

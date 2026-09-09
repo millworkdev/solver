@@ -1,11 +1,12 @@
 import type { Solver } from "./client.js";
 import { type Qualification } from "./cliQualification.js";
 import type { Account, TenantTemplateId } from "./types.js";
-export type InspectionCommand = {
+import { type ByokChoiceFilter } from "./cliByokSelection.js";
+export type InspectionCommand = ({
     kind: "plan";
     templateId: TenantTemplateId;
     modelDeploymentId?: string;
-} | {
+} & ByokChoiceFilter) | {
     kind: "show";
     templateId?: TenantTemplateId;
     applicationId?: string;
@@ -24,6 +25,7 @@ export interface InspectionResult {
     human: string;
 }
 export declare function inspectionQualification(command: InspectionCommand, qualification: Qualification): InspectionResult;
+export declare function readQualificationFromApiError(error: unknown): Qualification | null;
 export declare function inspectionApiError(command: InspectionCommand, error: unknown): InspectionResult | null;
 type InspectionResources = {
     tenantTemplates: Pick<Solver["tenantTemplates"], "plan" | "get" | "recover" | "current">;

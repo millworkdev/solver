@@ -20,15 +20,30 @@ export function planCostSummary(plan) {
         + (paidNow ? "Applying this digest authorizes the listed live proof.\n" : "This step does not authorize a paid model run.\n");
 }
 /** Agents hand over a safe application ID; never copy approval URLs to chat. */
+export function providerConsentAction(sourceId) {
+    if (sourceId === "openrouter")
+        return { type: "provider_oauth_approval",
+            detail: "Sign in to Millwork in your browser, then approve OpenRouter access. No provider key or code to copy." };
+    if (sourceId === "aws_bedrock")
+        return { type: "temporary_aws_credential_entry",
+            detail: "Sign in to Millwork and add temporary AWS credentials, their actual expiration, region and exact inference profile on its secure setup page." };
+    if (["openai_direct", "anthropic_direct", "gemini_developer_api", "xai_direct", "moonshot_direct", "deepseek_direct", "fireworks"].includes(String(sourceId))) {
+        return { type: "provider_api_key_entry", detail: "Sign in to Millwork and add your provider's API key on its secure setup page. Do not put the key in this terminal or your coding assistant." };
+    }
+    return { type: "provider_browser_setup", detail: "Sign in to Millwork in your browser and complete the provider setup shown there, then return to this terminal." };
+}
 export function browserHandoff(application) {
     if (application.state !== "consent_pending")
         return undefined;
     return {
         type: "human_browser_approval_required",
+        action: providerConsentAction(application.diagnostics?.source_id).type,
+        source_id: typeof application.diagnostics?.source_id === "string" ? application.diagnostics.source_id : null,
         application_id: application.application_id,
         command: ["millwork", "tenant", "start", "--application-id", application.application_id],
+        npx_command: ["npx", "--yes", "@millwork/solver", "tenant", "start", "--application-id", application.application_id],
         expires_at: application.consent?.expires_at ?? null,
-        detail: "Ask the user to run this command in their interactive terminal now. It opens the provider approval page and continues the saved setup. Keep the consent URL private; do not paste it into shared chat. Browser approval does not authorize a paid run.",
+        detail: `Ask the account holder to run the continuation command now, before expires_at. ${providerConsentAction(application.diagnostics?.source_id).detail} Keep the consent URL private; do not paste it into shared chat. Browser setup does not authorize a paid run.`,
     };
 }
 export function liveProofCostSummary(application) {
@@ -84,12 +99,14 @@ export function applicationSummary(application, extras) {
         `Application: ${terminalText(application.application_id)}`];
     if (application.managed_arm_id)
         lines.push(`Arm: ${terminalText(application.managed_arm_id)}`);
+    if (application.source_connection_id)
+        lines.push(`Provider connection: ${terminalText(application.source_connection_id)}`);
     if (application.echo_execution_id)
-        lines.push(`Echo: ${terminalText(application.echo_execution_id)} (setup test, not live proof)`);
+        lines.push(`Test run (Echo): ${terminalText(application.echo_execution_id)} (no model call)`);
     if (ready) {
         const provenance = extras.output.model_provenance;
         if (provenance) {
-            lines.push(`Model: ${terminalText(provenance.requested.model_key)}`, `Upstream: ${terminalText(provenance.resolved?.upstream_ref ?? "not reported")}`, `Lane: ${terminalText(provenance.source.access_lane)}`, `Deployment: ${terminalText(provenance.deployment.model_deployment_id)}`);
+            lines.push(`Model: ${terminalText(provenance.requested.model_key)}`, `Provider: ${terminalText(provenance.source.source_id)}`, `Upstream: ${terminalText(provenance.resolved?.upstream_ref ?? "not reported")}`, `Lane: ${terminalText(provenance.source.access_lane)}`, `Deployment: ${terminalText(provenance.deployment.model_deployment_id)}`);
         }
         const text = terminalText(extras.output.final_text, true);
         lines.push("", "Result:", ...text.slice(0, 2000).split("\n").map((line) => `  ${line}`));
@@ -113,17 +130,17 @@ export function applicationSummary(application, extras) {
             lines.push("Consent link expired or unavailable; inspect the same application before explicitly retrying consent.");
         if (application.live_proof && !application.live_execution_id
             && !(Date.parse(application.live_proof.expires_at) > Date.now())) {
-            lines.push("Live-proof approval expired or unavailable. Refresh readiness on this same application, then separately approve its current digest; no new live request was submitted.");
+            lines.push("The spending proposal expired or is unavailable. Continue this setup to review a fresh proposal before running the model. No new live request was submitted.");
         }
         if (typeof application.diagnostics.billing_url === "string")
             lines.push(`Billing: ${terminalText(application.diagnostics.billing_url)}`);
         if (application.next_action.type === "top_up_in_billing" && !application.live_execution_id) {
-            lines.push("Live execution has not started. Complete the human top-up, then rerun to review current authorization.");
+            lines.push("Add Millwork credit in Billing, then continue this setup to review the paid run. The model run has not started.");
         }
     }
     // Application identity, never a consent URL or secret, is the recovery handle.
     const id = terminalText(application.application_id).replace(/'/g, "'\\''");
-    lines.push(`Inspect / continue: millwork tenant start --application-id '${id}'`, "For the complete machine-readable projection, add --json.");
+    lines.push(`Inspect setup (read-only): npx --yes @millwork/solver tenant show --application-id '${id}' --json`, `Continue setup: npx --yes @millwork/solver tenant start --application-id '${id}'`, "For the complete machine-readable projection, add --json.");
     if (extras.files)
         lines.push(`Files: ${extras.files.written.length} written; ${extras.files.skipped_existing.length} existing files preserved.`);
     return `${lines.join("\n")}\n`;

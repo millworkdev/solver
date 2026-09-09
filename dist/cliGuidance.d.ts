@@ -1,7 +1,7 @@
 export declare const API_KEYS_URL = "https://app.getmillwork.dev/keys";
 export declare const BILLING_URL = "https://app.getmillwork.dev/billing";
 export declare const START_DOCS_URL = "https://docs.getmillwork.dev/get-started/tenant-start";
-export declare const KEY_GUIDANCE = "Use your organization's Millwork API key. Find an existing key, or create one if needed, at https://app.getmillwork.dev/keys and set SOLVERAPI_API_KEY privately in the terminal running Millwork.";
+export declare const KEY_GUIDANCE = "Set SOLVERAPI_API_KEY in this terminal using your organization's Millwork API key. Use a key you saved, or create one at https://app.getmillwork.dev/keys. Keep the key private.";
 /** Support output is not a dump of request bodies, headers, or private URLs. */
 export declare function safeErrorText(value: unknown): string;
 export declare function cliApiError(error: unknown): {

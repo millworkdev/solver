@@ -39,6 +39,16 @@ export const allowedUrlPatterns = [
   // stops only at whitespace and brackets, so prose ending on this link would
   // otherwise fail. It cannot widen the host or admit another path.
   /^https:\/\/app\.getmillwork\.dev\/(?:keys|billing)[.,;:]?$/,
+  // Exact provider-owned key/help destinations printed by connection recovery.
+  // This does not authorize arbitrary provider URLs, query strings or lookalikes.
+  /^https:\/\/openrouter\.ai\/keys$/,
+  /^https:\/\/help\.openai\.com\/en\/articles\/9186755-managing-your-work-in-platform-with-projects$/,
+  /^https:\/\/platform\.claude\.com\/docs\/en\/api\/overview#prerequisites$/,
+  /^https:\/\/ai\.google\.dev\/gemini-api\/docs\/api-key$/,
+  /^https:\/\/docs\.x\.ai\/console\/faq\/security$/,
+  /^https:\/\/platform\.kimi\.ai\/docs\/overview$/,
+  /^https:\/\/api-docs\.deepseek\.com\/$/,
+  /^https:\/\/app\.fireworks\.ai\/settings\/users\/api-keys$/,
   /^https?:\/\/docs\.npmjs\.com\//,
   // Pinned, checksum-verified CI tooling download only.
   /^https:\/\/github\.com\/rhysd\/actionlint\//,

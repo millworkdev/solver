@@ -180,6 +180,7 @@ export interface TenantTemplatePlan {
         served_variant_id: string;
         certification_id: string;
     } | null;
+    byok_offerings?: Array<NonNullable<TenantTemplatePlan["byok_source"]>>;
     blockers: Array<{
         code: string;
         detail: string;
@@ -509,6 +510,8 @@ export interface SourceCredentialHandoffIntent {
     consumed_at: string | null;
     created_at: string;
     updated_at: string;
+    /** Completed connector binding metadata; pass this exact object when creating the connection. */
+    source_scope?: SourceScope;
 }
 /** The 201 start response additionally carries the browser continuation URL. */
 export interface StartedSourceCredentialHandoff extends SourceCredentialHandoffIntent {

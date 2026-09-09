@@ -26,6 +26,24 @@ test("clean prose passes", () => {
   assert.deepEqual(scanTextContent("dist/example.js", "// a plain public comment\n", existsAlways), []);
 });
 
+test("provider recovery permits only exact public help and key destinations", () => {
+  for (const url of [
+    "https://openrouter.ai/keys",
+    "https://help.openai.com/en/articles/9186755-managing-your-work-in-platform-with-projects",
+    "https://platform.claude.com/docs/en/api/overview#prerequisites",
+    "https://ai.google.dev/gemini-api/docs/api-key",
+    "https://docs.x.ai/console/faq/security",
+    "https://platform.kimi.ai/docs/overview",
+    "https://api-docs.deepseek.com/",
+    "https://app.fireworks.ai/settings/users/api-keys",
+  ]) {
+    assert.deepEqual(scanTextContent("dist/cliProviderLifecycle.js", url, existsNever), []);
+    for (const unsafe of [url + "?token=private", url + "/unapproved", url.replace(/(https:\/\/[^/]+)/, "$1.evil.invalid")]) {
+      onlyFailure(scanTextContent("dist/cliProviderLifecycle.js", unsafe, existsNever), "disallowed-url");
+    }
+  }
+});
+
 for (const [name, sample] of [
   ["scope row identifier", "per scope row T3 of the plan"],
   ["bare row identifier", "added for row M0 parity"],
