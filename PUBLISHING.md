@@ -58,11 +58,8 @@ every pull request and push to `main`:
   — the fail-closed npm credential inspection, exercised against the real
   pinned npm 11.5.1 (a clean environment and the inert setup-node
   placeholder pass; literal tokens, populated environment references, and
-  failing inspections refuse). The inspection is standalone tooling here:
-  wiring it into `publish.yml` is deliberately NOT done — `publish.yml` is
-  the bound trusted-publishing workflow, and modifying it invalidates the
-  binding proof; any such wiring is a separate, explicitly reviewed change
-  after the proof-publish.
+  failing inspections refuse). The publish precondition guard runs this inspection before checking
+  that the accepted version is absent from the registry.
 - pinned, checksum-verified actionlint over the workflows.
 
 CI never dispatches the publish workflow and never publishes.
@@ -72,10 +69,10 @@ CI never dispatches the publish workflow and never publishes.
 Publishing happens only through
 [`.github/workflows/publish.yml`](.github/workflows/publish.yml):
 
-- **Operator dispatch only** (`workflow_dispatch`) against the protected
-  `npm-publish` environment. The operator must create and protect that
-  environment (required reviewers) before the first dispatch; a dispatch is
-  itself an operator gate.
+- **Manual dispatch** (`workflow_dispatch`) by the release manager after
+  the operator accepts the release. Both packages require `expected-version`
+  and `dist-tag` (default `latest`). The protected `npm-publish` environment
+  still requires human approval before publication.
 - **npm trusted publishing (OIDC)** with provenance. The workflow has
   `id-token: write` and no npm token anywhere; it cannot publish until the
   operator configures the npm-side trusted publisher for
@@ -83,6 +80,8 @@ Publishing happens only through
 - **Pinned toolchain**: GitHub-hosted `ubuntu-24.04`, Node `22.14.0`,
   npm CLI `11.5.1`.
 - **Immutable-version discipline**: the workflow refuses to run if the
-  `package.json` version already exists on the registry, refuses the `latest`
-  dist-tag, and publishes under an explicit non-default tag (default
-  `candidate`). `latest` is never moved by this workflow.
+  `package.json` version already exists on the registry or differs from
+  `expected-version`. Only a definitive E404 may proceed. Tags must match
+  the workflow pattern and cannot start with a number. For the accepted release, set `dist-tag`
+  to `latest`. Publishing under `latest` leaves existing `candidate` tags on
+  their prior versions. Provenance and the token refusal remain required.
