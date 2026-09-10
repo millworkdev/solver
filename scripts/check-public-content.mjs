@@ -49,6 +49,8 @@ export const allowedUrlPatterns = [
   /^https:\/\/platform\.kimi\.ai\/docs\/overview$/,
   /^https:\/\/api-docs\.deepseek\.com\/$/,
   /^https:\/\/app\.fireworks\.ai\/settings\/users\/api-keys$/,
+  /^https:\/\/docs\.aws\.amazon\.com\/IAM\/latest\/UserGuide\/id_credentials_temp_use-resources\.html$/,
+  /^https:\/\/docs\.aws\.amazon\.com\/bedrock\/latest\/userguide\/api-keys\.html#api-keys-gen-short$/,
   /^https?:\/\/docs\.npmjs\.com\//,
   // Pinned, checksum-verified CI tooling download only.
   /^https:\/\/github\.com\/rhysd\/actionlint\//,

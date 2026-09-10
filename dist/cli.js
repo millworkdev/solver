@@ -11,7 +11,7 @@ import { POOL_STARTER_CONFIG_PATH, STARTER_CONFIG_PATH, STARTER_ECHO_EXAMPLE_PAT
 import { principalScopedIdempotencyKey, progressTenantStart, tenantStartKey } from "./tenantStartFlow.js";
 import { createConsentPresenter } from "./tenantConsentBrowser.js";
 import { hostedConsentUrl } from "./tenantStartFlow.js";
-import { planByokChoice, byokChoice, assertRecoveredByokChoice } from "./cliByokSelection.js";
+import { planByokChoice, byokChoice, resolveApprovedByokChoice, assertRecoveredByokChoice } from "./cliByokSelection.js";
 import { resolveProviderLifecycleCommand, runProviderLifecycle, providerLifecycleSummary, ProviderInspectionError } from "./cliProviderLifecycle.js";
 import { applicationSummary, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
 const cliArgs = process.argv.slice(2);
@@ -100,7 +100,7 @@ async function confirm(question) {
 }
 async function chooseByokOffering(offerings) {
     process.stderr.write("Choose your provider and model. Your provider bills model usage; Millwork charges its displayed live-run fee.\n");
-    offerings.forEach((item, index) => process.stderr.write(`${index + 1}. ${terminalText(item.source_id)} — ${terminalText(item.model_key)} (${terminalText(item.served_variant_id)})\n`));
+    offerings.forEach((item, index) => process.stderr.write(`${index + 1}. ${terminalText(item.source_id)} — ${terminalText(item.model_key)} (${terminalText(item.served_variant_id)})${item.source_id === "aws_bedrock" ? item.auth_scheme === "api_key" ? " — Bedrock API key" : " — advanced AWS STS" : ""}\n`));
     const rl = createInterface({ input, output: process.stderr });
     try {
         const answer = (await rl.question("Choice number (Enter to cancel): ")).trim();
@@ -430,7 +430,21 @@ async function main() {
     const connecting = cliArgs[0] === "provider" && cliArgs[1] === "connect";
     if (connecting && (!cliArgs[2] || cliArgs[2].startsWith("--")))
         throw new InspectionUsageError("usage: millwork provider connect <source-id>. Run millwork provider list for available providers.");
-    const args = connecting ? ["tenant", "start", "--template", "byok-open-model", "--source-id", cliArgs[2], ...cliArgs.slice(3)] : cliArgs;
+    // `provider connect <id> --source-id <id>` is the same choice said twice,
+    // not a conflict. Accept it when it agrees and name the disagreement when
+    // it does not, instead of failing with "Duplicate argument".
+    const connectTail = cliArgs.slice(3);
+    if (connecting) {
+        const repeated = connectTail.indexOf("--source-id");
+        if (repeated !== -1) {
+            const restated = connectTail[repeated + 1];
+            if (restated && !restated.startsWith("--") && restated !== cliArgs[2]) {
+                throw new InspectionUsageError(`This names two providers: ${cliArgs[2]} and ${restated}. Pass the source id once. Nothing was connected.`);
+            }
+            connectTail.splice(repeated, restated && !restated.startsWith("--") ? 2 : 1);
+        }
+    }
+    const args = connecting ? ["tenant", "start", "--template", "byok-open-model", "--source-id", cliArgs[2], ...connectTail] : cliArgs;
     if (args.includes("--open-browser") && args.includes("--no-browser"))
         throw new InspectionUsageError("Choose --open-browser or --no-browser, not both.");
     const providerLifecycle = resolveProviderLifecycleCommand(args);
@@ -466,11 +480,14 @@ async function main() {
         process.exit(2);
     }
     if (tenantStart) {
-        const booleanFlags = new Set(["--write", "--plan", "--json", "--no-browser", "--open-browser"]);
+        // --yes is the approval verb everywhere else in this CLI, and
+        // `provider connect` is rewritten into this command before parsing, so
+        // omitting it here rejected the approved connect before any call ran.
+        const booleanFlags = new Set(["--write", "--plan", "--json", "--no-browser", "--open-browser", "--yes"]);
         const valueFlags = new Set([
             "--template",
             "--model-deployment-id",
-            "--source-id", "--served-variant-id",
+            "--source-id", "--served-variant-id", "--auth-scheme",
             "--digest",
             "--issued-at",
             "--idempotency-key",
@@ -534,7 +551,11 @@ async function main() {
     const liveProofDigest = flagValue(args, "--live-proof-digest");
     const sourceId = flagValue(args, "--source-id");
     const servedVariantId = flagValue(args, "--served-variant-id");
-    const byokFilter = { ...(sourceId ? { sourceId } : {}), ...(servedVariantId ? { servedVariantId } : {}) };
+    const authScheme = flagValue(args, "--auth-scheme");
+    if (authScheme && (sourceId !== "aws_bedrock" || !["api_key", "aws_sts_sigv4"].includes(authScheme))) {
+        throw new InspectionUsageError("--auth-scheme requires --source-id aws_bedrock and api_key or aws_sts_sigv4. No method was substituted.");
+    }
+    const byokFilter = { ...(sourceId ? { sourceId } : {}), ...(servedVariantId ? { servedVariantId } : {}), ...(authScheme ? { authScheme } : {}) };
     if (applicationId || resumeAction || liveProofDigest) {
         const allowedResumeActions = new Set([
             "poll_consent",
@@ -598,12 +619,14 @@ async function main() {
         if (digest && issuedAt) {
             if (sourceId && !servedVariantId && !modelDeploymentId)
                 throw new InspectionUsageError("Applying a provider-specific plan requires its exact --served-variant-id from --plan --json.");
+            const approvedChoice = sourceId && servedVariantId
+                ? await resolveApprovedByokChoice(solver.tenantTemplates, { sourceId, servedVariantId, modelDeploymentId, authScheme }) : undefined;
             const application = await applyApprovedPlan(solver, {
                 digest,
                 issued_at: issuedAt,
                 template_id: templateId,
                 ...(modelDeploymentId ? { model_deployment_id: modelDeploymentId } : {}),
-                ...(sourceId && servedVariantId ? { byok_offering: { source_id: sourceId, served_variant_id: servedVariantId, auth_scheme: "api_key" } } : {}),
+                ...(approvedChoice ? { byok_offering: approvedChoice } : {}),
                 qualification: { state: "approved", next_action: { type: "approve_plan", detail: "" } },
                 blockers: [],
                 alternative_plans: [],
@@ -631,8 +654,30 @@ async function main() {
         if (!interactive) {
             if (templateId === "byok-open-model") {
                 const plan = await planByokChoice(solver.tenantTemplates, { ...byokFilter, modelDeploymentId });
+                // `provider connect` is a verb. With explicit approval it carries the
+                // journey through to a connection rather than handing back a plan the
+                // caller must re-apply; without --yes it still stops, because opening a
+                // hosted consent application is a real side effect.
+                // Approval is for one exact provider and model. Without a terminal there is
+                // no prompt to resolve an ambiguous match, and --yes must not become the
+                // CLI choosing on the user's behalf: it approves a decision already made,
+                // never makes one.
+                if (plan && hasFlag(args, "--yes") && !plan.byok_source) {
+                    emitJson({ state: "action_required", plan,
+                        next_action: { type: "approve_plan", detail: "More than one provider and model match. Re-run with --served-variant-id naming the exact one from byok_offerings, together with --yes. Nothing was connected." } });
+                    process.exitCode = 2;
+                    return;
+                }
+                if (plan && hasFlag(args, "--yes")) {
+                    const application = await applyApprovedPlan(solver, {
+                        ...plan,
+                        ...(plan.catalog_row ? { model_deployment_id: plan.catalog_row.deployment.model_deployment_id } : {}),
+                    }, write, applicationKey);
+                    await finishApplication(solver, application);
+                    return;
+                }
                 emitJson({ state: "action_required", plan,
-                    next_action: { type: "approve_plan", detail: "Choose one offered provider/model, then review --plan --json with --source-id and --served-variant-id. Apply its exact --digest and --issued-at only after approval. No connection or paid run was started." } });
+                    next_action: { type: "approve_plan", detail: "Review this exact provider and model, then re-run the same command with --yes to connect. Nothing was connected and no paid run was started." } });
                 process.exitCode = 2;
                 return;
             }

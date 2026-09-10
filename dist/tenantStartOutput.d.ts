@@ -3,7 +3,7 @@ export declare const TENANT_START_OUTPUT_VERSION = "millwork.tenant-start.v1";
 export declare function tenantStartIsInteractive(args: string[], stdinTTY: boolean, stdoutTTY: boolean): boolean;
 export declare function planCostSummary(plan: TenantTemplatePlan): string;
 /** Agents hand over a safe application ID; never copy approval URLs to chat. */
-export declare function providerConsentAction(sourceId: unknown): {
+export declare function providerConsentAction(sourceId: unknown, authScheme?: unknown): {
     type: string;
     detail: string;
 };

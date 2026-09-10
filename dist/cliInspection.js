@@ -14,7 +14,7 @@ export function resolveInspectionCommand(args) {
     if (!kind)
         return null;
     const booleans = new Set(kind === "plan" ? ["--json", "--dry-run", "--plan"] : ["--json"]);
-    const values = new Set(kind === "plan" ? ["--template", "--model-deployment-id", "--source-id", "--served-variant-id"]
+    const values = new Set(kind === "plan" ? ["--template", "--model-deployment-id", "--source-id", "--served-variant-id", "--auth-scheme"]
         : kind === "show" ? ["--template", "--application-id", "--idempotency-key"] : []);
     const flags = new Map();
     for (let index = 2; index < args.length; index += 1) {
@@ -41,13 +41,14 @@ export function resolveInspectionCommand(args) {
     }
     if (kind === "models")
         return { kind };
-    if ((flags.has("--source-id") || flags.has("--served-variant-id")) && template !== "byok-open-model") {
+    if ((flags.has("--source-id") || flags.has("--served-variant-id") || flags.has("--auth-scheme")) && template !== "byok-open-model") {
         throw new InspectionUsageError("Provider/model choices require --template byok-open-model.");
     }
     if (kind === "plan")
         return { kind, templateId: (template ?? "pooled-open-model"),
             ...(flags.has("--source-id") ? { sourceId: flags.get("--source-id") } : {}),
             ...(flags.has("--served-variant-id") ? { servedVariantId: flags.get("--served-variant-id") } : {}),
+            ...(flags.has("--auth-scheme") ? { authScheme: flags.get("--auth-scheme") } : {}),
             ...(flags.has("--model-deployment-id") ? { modelDeploymentId: flags.get("--model-deployment-id") } : {}) };
     if (flags.has("--application-id") && (template || flags.has("--idempotency-key"))) {
         throw new InspectionUsageError("Use --application-id alone, or --template with an optional --idempotency-key; do not mix lookup identities.");

@@ -20,13 +20,16 @@ export function planCostSummary(plan) {
         + (paidNow ? "Applying this digest authorizes the listed live proof.\n" : "This step does not authorize a paid model run.\n");
 }
 /** Agents hand over a safe application ID; never copy approval URLs to chat. */
-export function providerConsentAction(sourceId) {
+export function providerConsentAction(sourceId, authScheme) {
     if (sourceId === "openrouter")
         return { type: "provider_oauth_approval",
             detail: "Sign in to Millwork in your browser, then approve OpenRouter access. No provider key or code to copy." };
     if (sourceId === "aws_bedrock")
-        return { type: "temporary_aws_credential_entry",
-            detail: "Sign in to Millwork and add temporary AWS credentials, their actual expiration, region and exact inference profile on its secure setup page." };
+        return authScheme === "aws_sts_sigv4"
+            ? { type: "temporary_aws_credential_entry",
+                detail: "This connection uses advanced STS authentication. Sign in to Millwork and add temporary AWS credentials, their actual expiration, region and exact inference profile on its secure setup page." }
+            : { type: "provider_api_key_entry",
+                detail: "Sign in to Millwork and add your Bedrock API key, region and exact inference profile on its secure setup page. Generate a short-term key in the AWS Bedrock console. Millwork uses it for up to 12 hours from submission; AWS can expire it sooner. Do not put the key in this terminal or your coding assistant." };
     if (["openai_direct", "anthropic_direct", "gemini_developer_api", "xai_direct", "moonshot_direct", "deepseek_direct", "fireworks"].includes(String(sourceId))) {
         return { type: "provider_api_key_entry", detail: "Sign in to Millwork and add your provider's API key on its secure setup page. Do not put the key in this terminal or your coding assistant." };
     }
@@ -35,15 +38,16 @@ export function providerConsentAction(sourceId) {
 export function browserHandoff(application) {
     if (application.state !== "consent_pending")
         return undefined;
+    const action = providerConsentAction(application.diagnostics?.source_id, application.diagnostics?.auth_scheme);
     return {
         type: "human_browser_approval_required",
-        action: providerConsentAction(application.diagnostics?.source_id).type,
+        action: action.type,
         source_id: typeof application.diagnostics?.source_id === "string" ? application.diagnostics.source_id : null,
         application_id: application.application_id,
         command: ["millwork", "tenant", "start", "--application-id", application.application_id],
         npx_command: ["npx", "--yes", "@millwork/solver", "tenant", "start", "--application-id", application.application_id],
         expires_at: application.consent?.expires_at ?? null,
-        detail: `Ask the account holder to run the continuation command now, before expires_at. ${providerConsentAction(application.diagnostics?.source_id).detail} Keep the consent URL private; do not paste it into shared chat. Browser setup does not authorize a paid run.`,
+        detail: `Ask the account holder to run the continuation command now, before expires_at. ${action.detail} Keep the consent URL private; do not paste it into shared chat. Browser setup does not authorize a paid run.`,
     };
 }
 export function liveProofCostSummary(application) {

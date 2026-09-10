@@ -22,6 +22,7 @@ interface ConsentPresenterOptions {
 /** Shared browser presentation for a server-owned setup or rotation handoff. */
 export declare function presentProviderConsent(input: {
     sourceId: unknown;
+    authScheme?: unknown;
     url: string;
     expiresAt: string;
 }, options: ConsentPresenterOptions): Promise<void>;
