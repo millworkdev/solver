@@ -1,26 +1,21 @@
-# Trusted-publishing workflow for @millwork/solver.
-#
-# Runs ONLY on explicit operator dispatch against the protected `npm-publish`
-# environment. Publishes exactly one new immutable version via npm trusted
-# publishing (OIDC, provenance) under a non-default dist-tag. It refuses to
-# run if the version already exists on the registry, refuses the `latest`
-# dist-tag, and carries no npm auth token anywhere.
-#
-# Preconditions the operator must complete before the first dispatch:
-#   1. Create and protect the `npm-publish` environment (required reviewers).
-#   2. Configure the npm-side trusted publisher for @millwork/solver:
-#      repository millworkdev/solver, workflow publish.yml,
-#      environment npm-publish. Until then, publish fails closed (no token).
+# Trusted publishing for @millwork/solver.
+# Manual dispatch after release acceptance; the npm-publish environment keeps
+# its human approval. Publishes one new immutable version with OIDC provenance.
+# Both packages use expected-version plus dist-tag (latest by default).
+# No npm token is permitted. Publisher/environment configuration is unchanged.
 
 name: publish
 
 on:
   workflow_dispatch:
     inputs:
-      dist-tag:
-        description: "npm dist-tag for the published version (never latest)"
+      expected-version:
+        description: "Exact accepted version (must equal package.json)"
         required: true
-        default: "candidate"
+      dist-tag:
+        description: "npm dist-tag for the published version"
+        required: true
+        default: "latest"
 
 permissions:
   contents: read
@@ -35,6 +30,8 @@ jobs:
     runs-on: ubuntu-24.04
     environment: npm-publish
     env:
+      # Dispatch values reach shell scripts only through the environment.
+      EXPECTED_VERSION: ${{ inputs.expected-version }}
       DIST_TAG: ${{ inputs.dist-tag }}
     steps:
       - name: Check out the dispatched ref
@@ -60,38 +57,8 @@ jobs:
       - name: Check public content rules
         run: node scripts/check-public-content.mjs
 
-      - name: Refuse a forbidden or malformed dist-tag
-        run: |
-          set -euo pipefail
-          if [ "${DIST_TAG}" = "latest" ]; then
-            echo "::error::Refusing to publish to the default dist-tag 'latest'. This workflow never moves latest."
-            exit 1
-          fi
-          if ! printf '%s' "${DIST_TAG}" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,63}$'; then
-            echo "::error::dist-tag '${DIST_TAG}' does not match the required pattern ^[a-z0-9][a-z0-9._-]{0,63}$."
-            exit 1
-          fi
-
-      - name: Refuse to republish an existing version
-        run: |
-          set -euo pipefail
-          package_name="$(node --print "require('./package.json').name")"
-          package_version="$(node --print "require('./package.json').version")"
-          test "${package_name}" = "@millwork/solver"
-          lookup_status=0
-          lookup_output="$(npm view "${package_name}@${package_version}" version --registry=https://registry.npmjs.org 2>&1)" || lookup_status=$?
-          if [ "${lookup_status}" -eq 0 ]; then
-            echo "::error::${package_name}@${package_version} already exists on the registry. Published versions are immutable; bump the version instead."
-            exit 1
-          fi
-          # Only a definitive 404 (version absent) may proceed. Any other
-          # registry failure is indistinguishable from an unsafe state.
-          if ! printf '%s' "${lookup_output}" | grep -q 'E404'; then
-            echo "::error::Registry lookup for ${package_name}@${package_version} failed for a reason other than E404; refusing to publish blind."
-            printf '%s\n' "${lookup_output}"
-            exit 1
-          fi
-          echo "${package_name}@${package_version} is unpublished; safe to proceed."
+      - name: Verify publish preconditions (immutable version, E404-only, token-free)
+        run: bash scripts/verify-publish-preconditions.sh
 
       - name: Publish with OIDC provenance
         run: |
