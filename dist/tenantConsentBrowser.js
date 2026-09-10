@@ -101,7 +101,7 @@ export async function presentProviderConsent(input, options) {
             write("Could not confirm browser launch. Use the link below; this setup is still waiting.\n");
     }
     write(`Open this short-lived link if needed (on another device if this terminal is remote):\n${input.url}\n`);
-    write(`${providerConsentAction(input.sourceId).detail}\nConsent link expires ${terminalText(input.expiresAt)}. ${options.interactive
+    write(`${providerConsentAction(input.sourceId, input.authScheme).detail}\nConsent link expires ${terminalText(input.expiresAt)}. ${options.interactive
         ? "Waiting for approval; keep this command running. Setup continues automatically when consent is received."
         : "Return to the saved continuation command after completing the browser step. No polling or paid approval was performed."}\nDo not paste a provider key or authorization code into this terminal. Connecting access does not approve a paid run.\n`);
 }
@@ -129,6 +129,7 @@ export function createConsentPresenter(options) {
             presented.add(identity);
             waitingApplication = application.application_id;
             await presentProviderConsent({ sourceId: application.diagnostics.source_id, url,
+                authScheme: application.diagnostics.auth_scheme,
                 expiresAt: application.consent.expires_at }, options);
         },
         progress(application) {

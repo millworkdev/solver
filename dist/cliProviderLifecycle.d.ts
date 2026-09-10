@@ -1,6 +1,6 @@
 import type { Solver } from "./client.js";
 import type { Qualification } from "./cliQualification.js";
-type LifecycleClient = Pick<Solver, "modelSourceProfiles" | "sourceConnections" | "sourceCredentialHandoffs" | "modelDeployments" | "arms" | "tenantTemplates">;
+type LifecycleClient = Pick<Solver, "modelSourceProfiles" | "sourceConnections" | "sourceCredentialHandoffs" | "modelDeployments" | "arms" | "tenantTemplates" | "account">;
 export type ProviderLifecycleCommand = {
     kind: "list";
 } | {
@@ -18,6 +18,7 @@ interface LifecycleUI {
     write(message: string): void;
     present?: (input: {
         sourceId: unknown;
+        authScheme?: unknown;
         url: string;
         expiresAt: string;
     }) => Promise<void>;

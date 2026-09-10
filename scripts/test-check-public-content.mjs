@@ -36,6 +36,8 @@ test("provider recovery permits only exact public help and key destinations", ()
     "https://platform.kimi.ai/docs/overview",
     "https://api-docs.deepseek.com/",
     "https://app.fireworks.ai/settings/users/api-keys",
+    "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_use-resources.html",
+    "https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html#api-keys-gen-short",
   ]) {
     assert.deepEqual(scanTextContent("dist/cliProviderLifecycle.js", url, existsNever), []);
     for (const unsafe of [url + "?token=private", url + "/unapproved", url.replace(/(https:\/\/[^/]+)/, "$1.evil.invalid")]) {

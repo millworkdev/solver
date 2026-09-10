@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { InspectionUsageError, readQualificationFromApiError } from "./cliInspection.js";
 import { presentProviderConsent } from "./tenantConsentBrowser.js";
 import { providerConsentAction, terminalText } from "./tenantStartOutput.js";
+import { principalScopedIdempotencyKey } from "./tenantStartFlow.js";
 const KEY_HELP = {
     openrouter: "https://openrouter.ai/keys",
     openai_direct: "https://help.openai.com/en/articles/9186755-managing-your-work-in-platform-with-projects",
@@ -11,6 +11,7 @@ const KEY_HELP = {
     moonshot_direct: "https://platform.kimi.ai/docs/overview",
     deepseek_direct: "https://api-docs.deepseek.com/",
     fireworks: "https://app.fireworks.ai/settings/users/api-keys",
+    aws_bedrock: "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_use-resources.html",
 };
 /** Keep read failures separate from mutation/idempotency errors at the CLI boundary. */
 export class ProviderInspectionError extends Error {
@@ -110,25 +111,60 @@ export async function runProviderLifecycle(solver, input, ui) {
         const [profiles, connections, { deployments, arms }] = await Promise.all([
             providerRead(solver.modelSourceProfiles.list()), providerRead(solver.sourceConnections.list()), providerRead(dependencies(solver))
         ]);
+        // Revocation is not readiness. The server requires an active status, a
+        // passed test, and a tested revision matching the current binding before
+        // it will serve a task (byokApplicationService.ts:441-444, 664-669), so a
+        // disabled or untested connection has revoked_at null and still cannot be
+        // used. Saying "can serve a task" from revocation alone was wrong.
+        const saved = connections.map(row => safeConnection(row, deployments, arms));
+        const notReady = (row) => {
+            if (row.status !== "active")
+                return `status is ${row.status}`;
+            if (row.test_state !== "passed")
+                return `provider check is ${row.test_state ?? "untested"}`;
+            if (row.tested_binding_revision !== row.binding_revision)
+                return "the current credential has not passed a provider check";
+            return null;
+        };
+        const live = saved.filter(row => !row.revoked_at);
+        const ready = live.filter(row => !notReady(row));
+        const blocked = live.filter(row => notReady(row))
+            .map(row => ({ ...row, not_ready_reason: notReady(row) }));
+        const disconnected = saved.filter(row => row.revoked_at)
+            .map(row => ({ ...row, status_label: "disconnected -- not usable; kept for history" }));
         return { state: "inspected", available_providers: profiles.sources.map(row => ({ source_id: row.source_id,
                 auth_schemes: row.auth_schemes.map(auth => auth.id), action: providerConsentAction(row.source_id).type })),
-            existing_connections: connections.map(row => safeConnection(row, deployments, arms)),
-            detail: "Choose from the providers listed for new setup. Your saved connections appear separately, even if a provider is no longer offered. Setup will check which models your provider account can use.",
+            ready_connections: ready,
+            not_ready_connections: blocked,
+            disconnected_connections: disconnected,
+            existing_connections: saved,
+            detail: `Choose from the providers listed for new setup. ${ready.length} connection(s) are ready to serve a task; `
+                + `${blocked.length} are saved but not ready, each with its reason; ${disconnected.length} are disconnected and kept for history only. `
+                + "Setup will check which models your provider account can use.",
             next_action: command(["tenant", "start", "--template", "byok-open-model"]) };
     }
     const connection = await providerRead(solver.sourceConnections.get(input.connectionId));
     assertCustomer(connection, input.connectionId);
     const { deployments, arms } = await providerRead(dependencies(solver));
     const summary = safeConnection(connection, deployments, arms);
-    const keyHelp = KEY_HELP[connection.source_id] ?? "https://docs.getmillwork.dev/help/provider-connections";
-    const cleanup = "This connection and its saved models are disabled. Millwork has scheduled removal of the saved key; removal is not yet confirmed. Revoke it at the provider too if needed. Calls already running may finish. No fallback model was selected. Choose another model before your next task if this was your current connection.";
+    const aws = connection.source_id === "aws_bedrock" && connection.auth_scheme === "aws_sts_sigv4";
+    const bedrockKey = connection.source_id === "aws_bedrock" && connection.auth_scheme === "api_key";
+    const keyHelp = bedrockKey ? "https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html#api-keys-gen-short"
+        : KEY_HELP[connection.source_id] ?? "https://docs.getmillwork.dev/help/provider-connections";
+    const cleanup = aws
+        ? "This connection and its saved models are disabled. Millwork has scheduled removal of the saved AWS credentials; removal is not yet confirmed. Calls already running may finish. Disconnecting does not end the session in AWS. No fallback model was selected. Choose another model before your next task if this was your current connection."
+        : bedrockKey ? "This Bedrock connection and its saved models are disabled. Millwork has scheduled removal of the saved key; removal is not yet confirmed. Disconnecting does not revoke the key at AWS. Short-term keys expire with their AWS session limit. Calls already running may finish. No fallback model was selected. Choose another model before your next task if this was your current connection."
+            : "This connection and its saved models are disabled. Millwork has scheduled removal of the saved key; removal is not yet confirmed. Revoke it at the provider too if needed. Calls already running may finish. No fallback model was selected. Choose another model before your next task if this was your current connection.";
     if (connection.revoked_at)
         return { state: "disconnected", connection: summary, detail: cleanup, provider_access_url: keyHelp };
     if (ui.interactive)
         ui.write(`Affected connection and saved models:\n${JSON.stringify(summary, null, 2)}\n`);
     const approved = input.yes || (ui.interactive && await ui.confirm(input.kind === "disconnect"
         ? `Disconnect ${terminalText(connection.source_id)} connection ${terminalText(connection.connection_id)}? This disables ${summary.deployments.length} deployments and ${summary.saved_models.length} saved models. Already-dispatched calls may finish. No fallback is selected. [y/N] `
-        : `Replace access for ${terminalText(connection.source_id)} connection ${terminalText(connection.connection_id)}? The replacement must pass the provider check before switching. This does not approve a paid run. [y/N] `));
+        : aws
+            ? `Renew AWS access for connection ${terminalText(connection.connection_id)}? Use a fresh temporary session for the same region and inference profile. Millwork checks it before switching. This does not approve a paid run. [y/N] `
+            : bedrockKey ? `Renew Bedrock access for connection ${terminalText(connection.connection_id)}? Generate a short-term Bedrock API key for the same region and inference profile. Millwork checks it before switching. This does not approve a paid run. [y/N] `
+                : `Replace access for ${terminalText(connection.source_id)} connection ${terminalText(connection.connection_id)}? The replacement must pass the provider check before switching. This does not approve a paid run. [y/N] `));
     if (!approved)
         return { state: "action_required", connection: summary,
             next_action: { type: "confirm_connection_change", ...command(["provider", input.kind, connection.connection_id,
@@ -149,7 +185,20 @@ export async function runProviderLifecycle(solver, input, ui) {
             return { state: "action_required", connection: summary, detail: "New setup for this provider is not currently offered. Your existing binding was not changed. You can still inspect or disconnect it.", provider_access_url: keyHelp };
         }
     }
-    const operationKey = input.idempotencyKey ?? `provider-rotate:${randomUUID()}`;
+    // Per connection and binding revision, not per invocation. Retyping the same
+    // command while a handoff is pending derives the same key and resumes it; a
+    // completed rotation advances binding_revision, which retires the key so a
+    // later deliberate rotation still starts fresh. A random key per run made the
+    // documented "resumes rather than starting a second one" true only for the
+    // users who pasted the continue line back.
+    // Namespaced by authenticated principal. Connections are tenant-shared and
+    // the ledger owns a tenant/key/endpoint tuple that rejects a different
+    // principal fingerprint, so a key derived from connection state alone is
+    // generated identically by a second member -- or by the same person after
+    // rotating their Millwork key -- and refused before its handler runs. An
+    // explicit --idempotency-key is left exactly as given: that is a replay
+    // request, and its owner chose it.
+    const operationKey = input.idempotencyKey ?? principalScopedIdempotencyKey((await providerRead(solver.account.get())).authenticated_principal_id ?? "", `provider-rotate:${connection.connection_id}:${connection.binding_revision}`);
     const baseArgs = ["provider", "rotate", connection.connection_id, "--idempotency-key", operationKey, "--yes"];
     // Print the replay key before a mutation so a lost start response is recoverable.
     ui.write(`Continue rotation: ${shellCommand(command(baseArgs).npx_command)}\n`);
@@ -169,8 +218,8 @@ export async function runProviderLifecycle(solver, input, ui) {
     }
     const resume = command([...baseArgs, "--handoff-id", intent.handoff_intent_id]);
     const pending = () => ({ state: "action_required", connection: summary, human_handoff: {
-            type: "human_browser_approval_required", action: providerConsentAction(connection.source_id).type,
-            detail: providerConsentAction(connection.source_id).detail, source_id: connection.source_id,
+            type: "human_browser_approval_required", action: providerConsentAction(connection.source_id, connection.auth_scheme).type,
+            detail: providerConsentAction(connection.source_id, connection.auth_scheme).detail, source_id: connection.source_id,
             handoff_intent_id: intent.handoff_intent_id, expires_at: intent.expires_at,
             ...("continue_url" in intent ? { continue_url: intent.continue_url } : {}), ...resume,
         }, detail: "The replacement has not been installed. Complete the existing browser step, then run the continuation command. No paid run was started." });
@@ -183,10 +232,20 @@ export async function runProviderLifecycle(solver, input, ui) {
             throw new Error("The provider setup link is invalid. No browser was opened.");
         if (Date.parse(intent.expires_at) > Date.now()) {
             if (ui.interactive || input.openBrowser)
-                await (ui.present ?? (value => presentProviderConsent(value, { interactive: ui.interactive, explicitOpenBrowser: input.openBrowser, noBrowser: input.noBrowser, write: ui.write })))({ sourceId: connection.source_id, url, expiresAt: intent.expires_at });
+                await (ui.present ?? (value => presentProviderConsent(value, { interactive: ui.interactive, explicitOpenBrowser: input.openBrowser, noBrowser: input.noBrowser, write: ui.write })))({ sourceId: connection.source_id, authScheme: connection.auth_scheme, url, expiresAt: intent.expires_at });
         }
     }
     ui.write(`Continue this same handoff: ${shellCommand(resume.npx_command)}\n`);
+    // A reused key replays the saved start response verbatim, which is the
+    // state at first submission -- normally pending. Recover the live attempt
+    // before deciding anything, or a retyped command reports action_required
+    // for a handoff the user already completed in the browser, and keeps
+    // replaying an expired one once its deadline passes.
+    if (!input.handoffId && intent.state === "pending") {
+        const live = await providerRead(solver.sourceCredentialHandoffs.poll(intent.handoff_intent_id));
+        assertHandoff(live, connection, intent.handoff_intent_id);
+        intent = { ...live, continue_url: intent.continue_url };
+    }
     if (ui.interactive) {
         for (let polls = 0; intent.state === "pending" && Date.parse(intent.expires_at) > Date.now() && polls < (ui.maxPolls ?? 300); polls++) {
             await (ui.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))))(2_000);
@@ -196,10 +255,31 @@ export async function runProviderLifecycle(solver, input, ui) {
     }
     if (intent.state === "pending" && Date.parse(intent.expires_at) > Date.now())
         return pending();
-    if (!["completed", "consumed"].includes(intent.state))
+    // Terminal, by whichever route. A due intent is expired by the server on
+    // read -- getSourceHandoffIntent expires pending AND completed intents past
+    // their deadline before returning -- so the state that arrives here is
+    // "expired", not "pending"; a cancelled or broker-failed browser flow is
+    // "failed"; and a pending intent past our own clock is terminal too. All
+    // three used to fall through to a bare `provider rotate`, which regenerates
+    // the same operation key and fetches the same dead handoff forever.
+    if (!["completed", "consumed"].includes(intent.state)) {
+        // The fresh key is derived from the attempt being abandoned, so it is
+        // distinct from it, identical across retypes of the printed command (a
+        // lost response is still recoverable), and advances on its own if this
+        // attempt also dies -- the next handoff has a different id. It carries the
+        // current principal namespace, because an explicit key is sent verbatim
+        // and an un-namespaced one is refused by the principal-bound ledger.
+        const freshKey = principalScopedIdempotencyKey((await providerRead(solver.account.get())).authenticated_principal_id ?? "", `provider-rotate:${connection.connection_id}:${connection.binding_revision}:after:${intent.handoff_intent_id}`);
+        const ended = intent.state === "failed" ? "did not finish" : "expired before it was completed";
         return { state: "action_required", connection: summary,
-            detail: "This browser step expired or did not finish. The replacement was not installed. Check the connection, then start a new replacement if the user agrees. A key already revoked at the provider will still need replacing.",
-            next_action: command(["provider", "rotate", connection.connection_id]) };
+            detail: aws
+                ? `The browser step ${ended}. The replacement was not installed and your existing AWS access is unchanged. Start a fresh attempt with the command below; retyping the previous one asks about the same dead attempt. If the previous AWS session has expired, renew it before running another task.`
+                : bedrockKey ? `The browser step ${ended}. The replacement was not installed and your existing Bedrock access is unchanged. Generate a short-term Bedrock key in the same region, then start a fresh attempt with the command below.`
+                    : `The browser step ${ended}. The replacement was not installed and your existing access is unchanged. Start a fresh attempt with the command below; retyping the previous one asks about the same dead attempt. A key already revoked at the provider will still need replacing.`,
+            next_action: { type: "start_new_rotation", ...command(["provider", "rotate", connection.connection_id,
+                    "--idempotency-key", freshKey, "--yes", "--json"]) },
+            provider_access_url: keyHelp };
+    }
     // A consumed handoff is not proof of success. Only the exact idempotent rotate response is.
     const rotated = await solver.sourceConnections.rotate(connection.connection_id, { handoffIntentId: intent.handoff_intent_id }, { idempotencyKey: `${operationKey}:replace` });
     assertCustomer(rotated, connection.connection_id);
@@ -208,11 +288,23 @@ export async function runProviderLifecycle(solver, input, ui) {
         throw new Error("Replacement access was not confirmed. Inspect provider list before retrying; no successful rotation is claimed.");
     }
     return { state: "rotated", connection: safeConnection(rotated, deployments, arms),
-        detail: "Your replacement passed its check and is now in use. The connection and saved models stay the same. Millwork has scheduled removal of the old saved key; revoke it at the provider when ready. Review any new spending prompt before continuing a run. No paid run or model switch was started.",
+        detail: aws
+            ? "Your new AWS session passed its check and is now in use. The connection and saved models stay the same. Millwork has scheduled removal of the old saved credentials. The old session expires at AWS at its original expiration time. Review any spending prompt before continuing a run. No paid run or model switch was started."
+            : bedrockKey ? "Your new Bedrock key passed its check and is now in use. The connection, authentication method and saved models stay the same. Millwork uses the replacement for up to 12 hours from submission; AWS can expire it sooner. Millwork has scheduled removal of the old saved key, not revocation at AWS. Review any spending prompt before continuing a run. No paid run or model switch was started."
+                : "Your replacement passed its check and is now in use. The connection and saved models stay the same. Millwork has scheduled removal of the old saved key; revoke it at the provider when ready. Review any new spending prompt before continuing a run. No paid run or model switch was started.",
         provider_access_url: keyHelp, next_action: command(["provider", "list", "--json"]) };
 }
 export function providerLifecycleSummary(document) {
-    if (document.existing_connections)
-        return `Available providers for new setup\n${JSON.stringify(document.available_providers, null, 2)}\nExisting connections and saved models\n${JSON.stringify(document.existing_connections, null, 2)}\n${document.detail}\n`;
+    if (document.existing_connections) {
+        const disconnected = (document.disconnected_connections ?? []);
+        const blocked = (document.not_ready_connections ?? []);
+        return `Available providers for new setup\n${JSON.stringify(document.available_providers, null, 2)}\n`
+            + `Ready to serve a task\n${JSON.stringify(document.ready_connections, null, 2)}\n`
+            + (blocked.length ? `Saved but not ready\n${JSON.stringify(blocked, null, 2)}\n` : "")
+            + (disconnected.length
+                ? `Disconnected (history only, not usable)\n${JSON.stringify(disconnected, null, 2)}\n`
+                : "Disconnected (history only, not usable)\nnone\n")
+            + `${document.detail}\n`;
+    }
     return `${String(document.state)}\n${String(document.detail ?? "Review the connection before continuing.")}\n${JSON.stringify(document, null, 2)}\n`;
 }
