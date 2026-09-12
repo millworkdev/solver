@@ -5,10 +5,10 @@ import { principalScopedIdempotencyKey } from "./tenantStartFlow.js";
 const KEY_HELP = {
     openrouter: "https://openrouter.ai/keys",
     openai_direct: "https://help.openai.com/en/articles/9186755-managing-your-work-in-platform-with-projects",
-    anthropic_direct: "https://platform.claude.com/docs/en/api/overview#prerequisites",
+    anthropic_direct: "https://platform.claude.com/docs/en/manage-claude/workspaces",
     gemini_developer_api: "https://ai.google.dev/gemini-api/docs/api-key",
     xai_direct: "https://docs.x.ai/console/faq/security",
-    moonshot_direct: "https://platform.kimi.ai/docs/overview",
+    moonshot_direct: "https://platform.kimi.ai/docs/guide/org-best-practice",
     deepseek_direct: "https://api-docs.deepseek.com/",
     fireworks: "https://app.fireworks.ai/settings/users/api-keys",
     aws_bedrock: "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_use-resources.html",
@@ -163,7 +163,7 @@ export async function runProviderLifecycle(solver, input, ui) {
         ? `Disconnect ${terminalText(connection.source_id)} connection ${terminalText(connection.connection_id)}? This disables ${summary.deployments.length} deployments and ${summary.saved_models.length} saved models. Already-dispatched calls may finish. No fallback is selected. [y/N] `
         : aws
             ? `Renew AWS access for connection ${terminalText(connection.connection_id)}? Use a fresh temporary session for the same region and inference profile. Millwork checks it before switching. This does not approve a paid run. [y/N] `
-            : bedrockKey ? `Renew Bedrock access for connection ${terminalText(connection.connection_id)}? Generate a short-term Bedrock API key for the same AWS account and region. Millwork finds the Global Opus 5 profile and checks it before switching. This does not approve a paid run. [y/N] `
+            : bedrockKey ? `Renew Bedrock access for connection ${terminalText(connection.connection_id)}? Generate a short-term Bedrock API key for the same AWS account and region. Millwork lists the account's system profiles and checks the connection's certified model before switching. This does not approve a paid run. [y/N] `
                 : `Replace access for ${terminalText(connection.source_id)} connection ${terminalText(connection.connection_id)}? The replacement must pass the provider check before switching. This does not approve a paid run. [y/N] `));
     if (!approved)
         return { state: "action_required", connection: summary,
@@ -217,9 +217,11 @@ export async function runProviderLifecycle(solver, input, ui) {
         intent = { ...intent, continue_url: recovered.continue_url };
     }
     const resume = command([...baseArgs, "--handoff-id", intent.handoff_intent_id]);
+    const consentAction = providerConsentAction(connection.source_id, connection.auth_scheme);
     const pending = () => ({ state: "action_required", connection: summary, human_handoff: {
-            type: "human_browser_approval_required", action: providerConsentAction(connection.source_id, connection.auth_scheme).type,
-            detail: providerConsentAction(connection.source_id, connection.auth_scheme).detail, source_id: connection.source_id,
+            type: "human_browser_approval_required", action: consentAction.type,
+            detail: consentAction.detail, source_id: connection.source_id,
+            ...(consentAction.provider_access_url ? { provider_access_url: consentAction.provider_access_url } : {}),
             handoff_intent_id: intent.handoff_intent_id, expires_at: intent.expires_at,
             ...("continue_url" in intent ? { continue_url: intent.continue_url } : {}), ...resume,
         }, detail: "The replacement has not been installed. Complete the existing browser step, then run the continuation command. No paid run was started." });
