@@ -163,7 +163,7 @@ export async function runProviderLifecycle(solver, input, ui) {
         ? `Disconnect ${terminalText(connection.source_id)} connection ${terminalText(connection.connection_id)}? This disables ${summary.deployments.length} deployments and ${summary.saved_models.length} saved models. Already-dispatched calls may finish. No fallback is selected. [y/N] `
         : aws
             ? `Renew AWS access for connection ${terminalText(connection.connection_id)}? Use a fresh temporary session for the same region and inference profile. Millwork checks it before switching. This does not approve a paid run. [y/N] `
-            : bedrockKey ? `Renew Bedrock access for connection ${terminalText(connection.connection_id)}? Generate a short-term Bedrock API key for the same region and inference profile. Millwork checks it before switching. This does not approve a paid run. [y/N] `
+            : bedrockKey ? `Renew Bedrock access for connection ${terminalText(connection.connection_id)}? Generate a short-term Bedrock API key for the same AWS account and region. Millwork finds the Global Opus 5 profile and checks it before switching. This does not approve a paid run. [y/N] `
                 : `Replace access for ${terminalText(connection.source_id)} connection ${terminalText(connection.connection_id)}? The replacement must pass the provider check before switching. This does not approve a paid run. [y/N] `));
     if (!approved)
         return { state: "action_required", connection: summary,
@@ -274,7 +274,7 @@ export async function runProviderLifecycle(solver, input, ui) {
         return { state: "action_required", connection: summary,
             detail: aws
                 ? `The browser step ${ended}. The replacement was not installed and your existing AWS access is unchanged. Start a fresh attempt with the command below; retyping the previous one asks about the same dead attempt. If the previous AWS session has expired, renew it before running another task.`
-                : bedrockKey ? `The browser step ${ended}. The replacement was not installed and your existing Bedrock access is unchanged. Generate a short-term Bedrock key in the same region, then start a fresh attempt with the command below.`
+                : bedrockKey ? `The browser step ${ended}. The replacement was not installed and your existing Bedrock access is unchanged. Generate a short-term Bedrock key in the same AWS account and region, then start a fresh attempt with the command below.`
                     : `The browser step ${ended}. The replacement was not installed and your existing access is unchanged. Start a fresh attempt with the command below; retyping the previous one asks about the same dead attempt. A key already revoked at the provider will still need replacing.`,
             next_action: { type: "start_new_rotation", ...command(["provider", "rotate", connection.connection_id,
                     "--idempotency-key", freshKey, "--yes", "--json"]) },

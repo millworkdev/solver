@@ -2,7 +2,7 @@ const _armStatusMatchesContract = true;
 const _costClassMatchesContract = true;
 const _dataClassMatchesContract = true;
 // Model source chain (backend truth: sourceProfileRegistry.ts AUTH_PROFILES /
-// PROTOCOL_PROFILES keys, sourceCertification.ts NORMALIZED_SOURCE_ERRORS,
+// PROTOCOL_PROFILES keys, sourceConnectionRuntime.ts SOURCE_CONNECTION_ERRORS,
 // modelSourceRegistry.ts scope/assurance enums, sourceHandoffSchemas.ts
 // intent states -- the live tests assert these values on real wires).
 const _authSchemeMatchesContract = true;
