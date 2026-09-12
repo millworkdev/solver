@@ -424,7 +424,7 @@ export interface ComplianceExportBundle {
 }
 export type SourceAuthScheme = "api_key" | "oauth2" | "aws_sts_sigv4";
 export type SourceProtocolProfile = "openai_responses" | "openai_chat" | "anthropic_messages" | "gemini_generate_content" | "bedrock_converse";
-export type NormalizedSourceError = "authentication" | "permission" | "model_not_found" | "rate_limited" | "capacity" | "source_5xx";
+export type NormalizedSourceError = "authentication" | "permission" | "model_not_found" | "rate_limited" | "capacity" | "source_5xx" | "provider_insufficient_funds";
 /** Discriminated connection scope -- exactly one of the three variants. */
 export type SourceScope = {
     kind: "account";

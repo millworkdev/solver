@@ -29,7 +29,7 @@ export function providerConsentAction(sourceId, authScheme) {
             ? { type: "temporary_aws_credential_entry",
                 detail: "This connection uses advanced STS authentication. Sign in to Millwork and add temporary AWS credentials, their actual expiration, region and exact inference profile on its secure setup page." }
             : { type: "provider_api_key_entry",
-                detail: "Sign in to Millwork and add your Bedrock API key, region and exact inference profile on its secure setup page. Generate a short-term key in the AWS Bedrock console. Millwork uses it for up to 12 hours from submission; AWS can expire it sooner. Do not put the key in this terminal or your coding assistant." };
+                detail: "Sign in to Millwork and add your Bedrock API key on its secure setup page. Region is optional and defaults to us-east-1. Millwork finds the Global Opus 5 profile in your AWS account, and uses the key for up to 12 hours from submission; AWS can expire it sooner. Do not put the key in this terminal or your coding assistant." };
     if (["openai_direct", "anthropic_direct", "gemini_developer_api", "xai_direct", "moonshot_direct", "deepseek_direct", "fireworks"].includes(String(sourceId))) {
         return { type: "provider_api_key_entry", detail: "Sign in to Millwork and add your provider's API key on its secure setup page. Do not put the key in this terminal or your coding assistant." };
     }
@@ -127,6 +127,9 @@ export function applicationSummary(application, extras) {
         if (echoReady)
             lines.push(`Receipt: ${terminalText(application.receipt.receipt_id)}`);
         lines.push(`Next: ${terminalText(application.next_action.type)} — ${terminalText(application.next_action.detail)}`);
+        if (application.diagnostics.failure_code === "provider_insufficient_funds") {
+            lines.push("Provider credit is required. Top up the provider account, not your Millwork wallet. Inspect this execution's receipt before explicitly approving a new run; no automatic retry was started.");
+        }
         const consentUrl = hostedConsentUrl(application);
         if (consentUrl)
             lines.push(`Consent: ${terminalText(consentUrl)}`);
