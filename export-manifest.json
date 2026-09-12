@@ -62,7 +62,7 @@
     },
     {
       "path": "dist/cliProviderLifecycle.js",
-      "sha256": "9120aefba5de3a3196a67ab649750917399d216ccea5fa86ae02c61692d22943"
+      "sha256": "9b26297669e7fe8e2e88f3680a1120ba33110b5f14bda472521623f22c29e436"
     },
     {
       "path": "dist/cliQualification.d.ts",
@@ -274,11 +274,11 @@
     },
     {
       "path": "dist/tenantStartOutput.d.ts",
-      "sha256": "2a129d83850775fb531b2263e6571ca4774e3ea1a73db8cc891b0bf524fc7f21"
+      "sha256": "d447bd0526b456a47e553014c76dea5cc3d3733e85ee622dfa1927c5a9023a92"
     },
     {
       "path": "dist/tenantStartOutput.js",
-      "sha256": "edc6cce588e7a41d0916e3ca6267c3347dc6867b10bab1723307b17ce61ce4a5"
+      "sha256": "e8d7d8b94dd85cf4bbd2c55a6386dc3311677073c0c91184e7253f3111a632a8"
     },
     {
       "path": "dist/types.d.ts",
@@ -289,5 +289,5 @@
       "sha256": "c29d3594690c781e06590537a3dc7852b31e54b19a7f3deb585a1b381a89afb4"
     }
   ],
-  "aggregate_sha256": "0cd6d1b346b5c5ed8918102602e1c3a576f3a7c95e47c330e48f7042f164ace0"
+  "aggregate_sha256": "654051af0f5456585f4375477d662c377add254a09ad81886af344ce8d728673"
 }

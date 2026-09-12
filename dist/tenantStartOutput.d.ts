@@ -6,8 +6,15 @@ export declare function planCostSummary(plan: TenantTemplatePlan): string;
 export declare function providerConsentAction(sourceId: unknown, authScheme?: unknown): {
     type: string;
     detail: string;
+    provider_access_url?: undefined;
+} | {
+    type: string;
+    detail: string;
+    provider_access_url: string;
 };
 export declare function browserHandoff(application: TenantTemplateApplication): {
+    detail: string;
+    provider_access_url?: string | undefined;
     type: string;
     action: string;
     source_id: string | null;
@@ -15,7 +22,6 @@ export declare function browserHandoff(application: TenantTemplateApplication): 
     command: string[];
     npx_command: string[];
     expires_at: string | null;
-    detail: string;
 } | undefined;
 export declare function liveProofCostSummary(application: TenantTemplateApplication): string;
 /** Model output, API details and identifiers are data, never terminal commands. */

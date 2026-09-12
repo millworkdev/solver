@@ -1,6 +1,36 @@
 import { stripVTControlCharacters } from "node:util";
 import { hostedConsentUrl } from "./tenantStartFlow.js";
 export const TENANT_START_OUTPUT_VERSION = "millwork.tenant-start.v1";
+const NATIVE_KEY_ACTIONS = {
+    openai_direct: {
+        credential: "one active OpenAI project API key from the project you intend to use",
+        provider_access_url: "https://help.openai.com/en/articles/9186755-managing-your-work-in-platform-with-projects",
+    },
+    anthropic_direct: {
+        credential: "one active Anthropic API key from the workspace you intend to use",
+        provider_access_url: "https://platform.claude.com/docs/en/manage-claude/workspaces",
+    },
+    gemini_developer_api: {
+        credential: "one active Gemini Developer API key associated with the Google Cloud project you intend to use (not a Vertex AI credential)",
+        provider_access_url: "https://ai.google.dev/gemini-api/docs/api-key",
+    },
+    xai_direct: {
+        credential: "one active xAI API key from the account you intend to use",
+        provider_access_url: "https://docs.x.ai/console/faq/security",
+    },
+    moonshot_direct: {
+        credential: "one active Moonshot API key from the Kimi project you intend to use",
+        provider_access_url: "https://platform.kimi.ai/docs/guide/org-best-practice",
+    },
+    deepseek_direct: {
+        credential: "one active DeepSeek API key from the account you intend to use",
+        provider_access_url: "https://api-docs.deepseek.com/",
+    },
+    fireworks: {
+        credential: "one active Fireworks API key from the account you intend to use",
+        provider_access_url: "https://app.fireworks.ai/settings/users/api-keys",
+    },
+};
 export function tenantStartIsInteractive(args, stdinTTY, stdoutTTY) {
     return !args.includes("--json") && stdinTTY && stdoutTTY;
 }
@@ -29,9 +59,12 @@ export function providerConsentAction(sourceId, authScheme) {
             ? { type: "temporary_aws_credential_entry",
                 detail: "This connection uses advanced STS authentication. Sign in to Millwork and add temporary AWS credentials, their actual expiration, region and exact inference profile on its secure setup page." }
             : { type: "provider_api_key_entry",
-                detail: "Sign in to Millwork and add your Bedrock API key on its secure setup page. Region is optional and defaults to us-east-1. Millwork finds the Global Opus 5 profile in your AWS account, and uses the key for up to 12 hours from submission; AWS can expire it sooner. Do not put the key in this terminal or your coding assistant." };
-    if (["openai_direct", "anthropic_direct", "gemini_developer_api", "xai_direct", "moonshot_direct", "deepseek_direct", "fireworks"].includes(String(sourceId))) {
-        return { type: "provider_api_key_entry", detail: "Sign in to Millwork and add your provider's API key on its secure setup page. Do not put the key in this terminal or your coding assistant." };
+                detail: "Sign in to Millwork and add your Bedrock API key on its secure setup page. Region is optional and defaults to us-east-1. Millwork lists your available system profiles and matches the certified Bedrock model Millwork offers. Millwork uses the key for up to 12 hours from submission; AWS can expire it sooner. Do not put the key in this terminal or your coding assistant." };
+    const native = NATIVE_KEY_ACTIONS[String(sourceId)];
+    if (native) {
+        return { type: "provider_api_key_entry",
+            detail: `Sign in to Millwork and privately enter ${native.credential} on its secure setup page. Initial setup needs one key; no project, workspace or account ID is entered in the CLI. Do not put the key in this terminal or your coding assistant.`,
+            provider_access_url: native.provider_access_url };
     }
     return { type: "provider_browser_setup", detail: "Sign in to Millwork in your browser and complete the provider setup shown there, then return to this terminal." };
 }
@@ -47,6 +80,7 @@ export function browserHandoff(application) {
         command: ["millwork", "tenant", "start", "--application-id", application.application_id],
         npx_command: ["npx", "--yes", "@millwork/solver", "tenant", "start", "--application-id", application.application_id],
         expires_at: application.consent?.expires_at ?? null,
+        ...(action.provider_access_url ? { provider_access_url: action.provider_access_url } : {}),
         detail: `Ask the account holder to run the continuation command now, before expires_at. ${action.detail} Keep the consent URL private; do not paste it into shared chat. Browser setup does not authorize a paid run.`,
     };
 }
