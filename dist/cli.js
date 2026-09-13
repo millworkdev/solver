@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Solver } from "./client.js";
-import { DEFAULT_API_BASE_URL, resolveDiscoveryCommand } from "./cliDiscovery.js";
+import { DEFAULT_API_BASE_URL, resolveDiscoveryCommand, safeBaseUrl } from "./cliDiscovery.js";
 import { cliApiError, safeErrorText } from "./cliGuidance.js";
+import { bootstrapOrganizationKey, loadStoredOrganizationKey } from "./cliOrganizationKeyBootstrap.js";
 import { inspectCommand, inspectionApiError, inspectionQualification, InspectionUsageError, resolveInspectionCommand } from "./cliInspection.js";
 import { qualificationFromApiError, qualificationFromPlan, qualifyMissingCredential, } from "./cliQualification.js";
 import { POOL_STARTER_CONFIG_PATH, STARTER_CONFIG_PATH, STARTER_ECHO_EXAMPLE_PATH, STARTER_POOL_EXAMPLE_PATH, writeApprovedScaffold, } from "./starterScaffold.js";
@@ -53,6 +54,55 @@ function flagValue(args, name) {
 }
 function hasFlag(args, name) {
     return args.includes(name);
+}
+function authenticatedCommand(args) {
+    return args[0] === "doctor"
+        || (args[0] === "tenant" && ["start", "show"].includes(args[1] ?? ""))
+        || (args[0] === "provider" && ["list", "connect", "rotate", "disconnect"].includes(args[1] ?? ""))
+        || (args[0] === "models" && ["list", "use", "add"].includes(args[1] ?? ""))
+        || (args[0] === "arms" && args[1] === "disable")
+        || args[0] === "run"
+        || (args[0] === "verifier" && args[1] === "attach");
+}
+async function prepareOrganizationKey(args, tenantStart) {
+    if (!authenticatedCommand(args) || process.env.SOLVERAPI_API_KEY?.trim())
+        return;
+    const base = safeBaseUrl(process.env.SOLVERAPI_BASE_URL);
+    if (!base.valid || !base.origin)
+        return;
+    const stored = await loadStoredOrganizationKey(base.origin);
+    if (stored) {
+        process.env.SOLVERAPI_API_KEY = stored;
+        return;
+    }
+    const planning = hasFlag(args, "--plan") || hasFlag(args, "--dry-run");
+    if (!tenantStart || planning || hasFlag(args, "--no-browser")
+        || (!interactive && !hasFlag(args, "--open-browser")))
+        return;
+    const environment = process.env;
+    const remote = Boolean(environment.SSH_CONNECTION || environment.SSH_CLIENT || environment.SSH_TTY);
+    const automated = Boolean(environment.CI && !["0", "false"].includes(environment.CI.toLowerCase()));
+    const noDesktop = process.platform === "linux" && !environment.DISPLAY && !environment.WAYLAND_DISPLAY;
+    if (remote || automated || noDesktop)
+        return;
+    process.stderr.write("Opening your browser to finish setup…\n");
+    const result = await bootstrapOrganizationKey({ apiBaseUrl: base.origin });
+    if (result.state === "configured") {
+        process.env.SOLVERAPI_API_KEY = result.apiKey;
+        process.stderr.write("Key saved. Continuing setup…\n");
+    }
+    else if (result.state === "cancelled") {
+        process.stderr.write("Millwork key setup cancelled. No key was saved.\n");
+    }
+    else if (result.state === "expired") {
+        process.stderr.write("The private local setup page expired. No key was saved.\n");
+    }
+    else if (result.state === "browser_unavailable") {
+        process.stderr.write("The system browser could not be opened. No key was saved.\n");
+    }
+    else {
+        process.stderr.write("Private local key setup is unavailable on this computer. No key was saved.\n");
+    }
 }
 function emitQualification(qualification) {
     if (interactive) {
@@ -448,42 +498,9 @@ async function main() {
     if (args.includes("--open-browser") && args.includes("--no-browser"))
         throw new InspectionUsageError("Choose --open-browser or --no-browser, not both.");
     const providerLifecycle = resolveProviderLifecycleCommand(args);
-    const discovery = resolveDiscoveryCommand(args);
-    if (discovery) {
-        process[discovery.stream].write(`${discovery.text}\n`);
-        if (discovery.exitCode !== 0)
-            process.exit(discovery.exitCode);
-        return;
-    }
-    const inspection = resolveInspectionCommand(args);
-    if (inspection) {
-        const missing = qualifyMissingCredential({ apiKey: process.env.SOLVERAPI_API_KEY });
-        const readClient = (timeoutMs) => new Solver({ apiKey: process.env.SOLVERAPI_API_KEY,
-            baseUrl: process.env.SOLVERAPI_BASE_URL ?? DEFAULT_API_BASE_URL, maxRetries: 0,
-            fetchImpl: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }) });
-        const result = missing ? inspectionQualification(inspection, missing)
-            : await inspectCommand(inspection, readClient(10_000), () => readClient(3_000).account.get())
-                .catch((error) => { const mapped = inspectionApiError(inspection, error); if (mapped)
-                return mapped; throw error; });
-        process.stdout.write(interactive ? result.human : `${JSON.stringify(result.document, null, 2)}\n`);
-        process.exitCode = result.exitCode;
-        return;
-    }
     const tenantStart = args[0] === "tenant" && args[1] === "start";
-    const reconfiguration = (args[0] === "models" && (args[1] === "use" || args[1] === "add"))
-        || (args[0] === "arms" && args[1] === "disable")
-        || args[0] === "run"
-        || (args[0] === "provider" && args[1] === "connect")
-        || (args[0] === "verifier" && args[1] === "attach");
-    if (!tenantStart && !reconfiguration && !providerLifecycle) {
-        process.stderr.write("usage: millwork <docs|doctor|--version|models list|models use <catalog-model>|models add <catalog-model>|arms disable <arm-id>|run --preset <id> --objective <task>|provider list|provider connect <source-id>|provider rotate <connection-id>|provider disconnect <connection-id>|verifier attach --endpoint <url> --auth-ref <handle>|tenant show|tenant start> [options]\n");
-        process.exit(2);
-    }
     if (tenantStart) {
-        // --yes is the approval verb everywhere else in this CLI, and
-        // `provider connect` is rewritten into this command before parsing, so
-        // omitting it here rejected the approved connect before any call ran.
-        const booleanFlags = new Set(["--write", "--plan", "--json", "--no-browser", "--open-browser", "--yes"]);
+        const booleanFlags = new Set(["--write", "--plan", "--dry-run", "--json", "--no-browser", "--open-browser", "--yes"]);
         const valueFlags = new Set([
             "--template",
             "--model-deployment-id",
@@ -514,6 +531,37 @@ async function main() {
             process.stderr.write(`unknown argument: ${terminalText(argument)}\n`);
             process.exit(2);
         }
+    }
+    await prepareOrganizationKey(args, tenantStart);
+    const discovery = resolveDiscoveryCommand(args);
+    if (discovery) {
+        process[discovery.stream].write(`${discovery.text}\n`);
+        if (discovery.exitCode !== 0)
+            process.exit(discovery.exitCode);
+        return;
+    }
+    const inspection = resolveInspectionCommand(args);
+    if (inspection) {
+        const missing = qualifyMissingCredential({ apiKey: process.env.SOLVERAPI_API_KEY });
+        const readClient = (timeoutMs) => new Solver({ apiKey: process.env.SOLVERAPI_API_KEY,
+            baseUrl: process.env.SOLVERAPI_BASE_URL ?? DEFAULT_API_BASE_URL, maxRetries: 0,
+            fetchImpl: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }) });
+        const result = missing ? inspectionQualification(inspection, missing)
+            : await inspectCommand(inspection, readClient(10_000), () => readClient(3_000).account.get())
+                .catch((error) => { const mapped = inspectionApiError(inspection, error); if (mapped)
+                return mapped; throw error; });
+        process.stdout.write(interactive ? result.human : `${JSON.stringify(result.document, null, 2)}\n`);
+        process.exitCode = result.exitCode;
+        return;
+    }
+    const reconfiguration = (args[0] === "models" && (args[1] === "use" || args[1] === "add"))
+        || (args[0] === "arms" && args[1] === "disable")
+        || args[0] === "run"
+        || (args[0] === "provider" && args[1] === "connect")
+        || (args[0] === "verifier" && args[1] === "attach");
+    if (!tenantStart && !reconfiguration && !providerLifecycle) {
+        process.stderr.write("usage: millwork <docs|doctor|--version|models list|models use <catalog-model>|models add <catalog-model>|arms disable <arm-id>|run --preset <id> --objective <task>|provider list|provider connect <source-id>|provider rotate <connection-id>|provider disconnect <connection-id>|verifier attach --endpoint <url> --auth-ref <handle>|tenant show|tenant start> [options]\n");
+        process.exit(2);
     }
     const missing = qualifyMissingCredential({
         apiKey: process.env.SOLVERAPI_API_KEY,

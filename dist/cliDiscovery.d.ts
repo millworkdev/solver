@@ -10,5 +10,10 @@ export interface CliDiscoveryResult {
     stream: "stdout" | "stderr";
     text: string;
 }
+export declare function safeBaseUrl(value: string | undefined): {
+    configured: boolean;
+    valid: boolean;
+    origin: string | null;
+};
 export declare function buildDoctorReport(environment: CliDiscoveryEnvironment, nodeVersion?: string): Record<string, unknown>;
 export declare function resolveDiscoveryCommand(args: string[], environment?: CliDiscoveryEnvironment, nodeVersion?: string): CliDiscoveryResult | null;

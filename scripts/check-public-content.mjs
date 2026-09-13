@@ -53,6 +53,9 @@ export const allowedUrlPatterns = [
   /^https:\/\/app\.fireworks\.ai\/settings\/users\/api-keys$/,
   /^https:\/\/docs\.aws\.amazon\.com\/IAM\/latest\/UserGuide\/id_credentials_temp_use-resources\.html$/,
   /^https:\/\/docs\.aws\.amazon\.com\/bedrock\/latest\/userguide\/api-keys\.html#api-keys-gen-short$/,
+  // Exact compiled template for the CLI-owned ephemeral IPv4-loopback form.
+  // This admits no concrete host, port, path, query or remote destination.
+  /^http:\/\/\$\{expectedHost\}$/,
   /^https?:\/\/docs\.npmjs\.com\//,
   // Pinned, checksum-verified CI tooling download only.
   /^https:\/\/github\.com\/rhysd\/actionlint\//,

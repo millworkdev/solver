@@ -14,12 +14,15 @@ function desktopEnvironment(environment) {
         return entry?.[1] ? [[key, entry[1]]] : [];
     }));
 }
-/** Request the OS browser, not consent itself. Never execute a shell or log its errors. */
-export async function openConsentBrowser(url, runtime = {}) {
-    // Defence in depth: only the already-validated current hosted URL reaches here.
+/** Request the OS browser. Never execute a shell, inherit credentials, or log errors. */
+async function openSystemBrowser(url, policy, runtime = {}) {
     try {
         const parsed = new URL(url);
-        if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash
+        const allowed = policy === "hosted_https"
+            ? parsed.protocol === "https:"
+            : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1" && parsed.port !== ""
+                && parsed.search === "" && /^\/organization-key\/[A-Za-z0-9_-]{32,128}$/.test(parsed.pathname);
+        if (!allowed || parsed.username || parsed.password || parsed.hash
             || url.length > 4096 || /\s|[\u0000-\u001f\u007f-\u009f]/u.test(url))
             return "unavailable";
         url = parsed.href;
@@ -68,6 +71,14 @@ export async function openConsentBrowser(url, runtime = {}) {
             finish("failed");
         }
     });
+}
+/** Open an already-validated hosted provider-consent URL. */
+export function openConsentBrowser(url, runtime = {}) {
+    return openSystemBrowser(url, "hosted_https", runtime);
+}
+/** Open only a tokenized page on the CLI-owned IPv4 loopback server. */
+export function openOrganizationKeyBrowser(url, runtime = {}) {
+    return openSystemBrowser(url, "loopback_http", runtime);
 }
 /** Shared browser presentation for a server-owned setup or rotation handoff. */
 export async function presentProviderConsent(input, options) {
