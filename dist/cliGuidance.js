@@ -3,7 +3,7 @@ import { terminalText } from "./tenantStartOutput.js";
 export const API_KEYS_URL = "https://app.getmillwork.dev/keys";
 export const BILLING_URL = "https://app.getmillwork.dev/billing";
 export const START_DOCS_URL = "https://docs.getmillwork.dev/get-started/tenant-start";
-export const KEY_GUIDANCE = `Set SOLVERAPI_API_KEY in this terminal using your organization's Millwork API key. Use a key you saved, or create one at ${API_KEYS_URL}. Keep the key private.`;
+export const KEY_GUIDANCE = `No Millwork organization API key is available. In a local interactive terminal, tenant start can open a private browser page to check and save one for this computer. Get it from Millwork dashboard → API keys at ${API_KEYS_URL}. For --no-browser, SSH, CI, or scripts, set SOLVERAPI_API_KEY from your secret store. Keep it out of chat and command arguments. A provider API key is a different credential.`;
 /** Support output is not a dump of request bodies, headers, or private URLs. */
 export function safeErrorText(value) {
     let text = terminalText(value);

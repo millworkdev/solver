@@ -262,6 +262,12 @@ test("the two customer destinations the CLI prints stay legal", () => {
   assert.deepEqual(scanTextContent("dist/cliGuidance.js", sample, existsAlways), []);
 });
 
+test("only the exact compiled loopback host template stays legal", () => {
+  assert.deepEqual(scanTextContent("dist/cliOrganizationKeyBootstrap.js", "http://${expectedHost}", existsAlways), []);
+  onlyFailure(scanTextContent("dist/cliOrganizationKeyBootstrap.js", "http://${otherHost}", existsAlways), "disallowed-url");
+  onlyFailure(scanTextContent("dist/cliOrganizationKeyBootstrap.js", "http://127.0.0.1:49152/private", existsAlways), "disallowed-url");
+});
+
 test("any other app subpath fails closed", () => {
   onlyFailure(scanTextContent("README.md", "see https://app.getmillwork.dev/admin", existsAlways), "disallowed-url");
   onlyFailure(scanTextContent("README.md", "see https://app.getmillwork.dev/keys/export", existsAlways), "disallowed-url");

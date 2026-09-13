@@ -10,7 +10,7 @@ function packageVersion() {
     }
     return manifest.version;
 }
-function safeBaseUrl(value) {
+export function safeBaseUrl(value) {
     if (!value) {
         return { configured: false, valid: true, origin: DEFAULT_API_BASE_URL };
     }

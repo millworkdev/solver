@@ -6,7 +6,7 @@
     "apply the private export recipe's single-line replacement table in order"
   ],
   "aggregate_digest_formula": "sha256 over the sorted lines '<sha256>  ./<path relative to dist>\\n' of every exported file",
-  "file_count": 70,
+  "file_count": 72,
   "files": [
     {
       "path": "dist/cli.d.ts",
@@ -14,7 +14,7 @@
     },
     {
       "path": "dist/cli.js",
-      "sha256": "985ca9b48489ceb21c81d11dde6f3365d8aa4b26332eefe710e5319a7542a580"
+      "sha256": "85802f4e12ceda599c75c7c284988dc206a5e60eec0934cd6e6d7a017b57353a"
     },
     {
       "path": "dist/cliByokSelection.d.ts",
@@ -26,11 +26,11 @@
     },
     {
       "path": "dist/cliDiscovery.d.ts",
-      "sha256": "ebe12371a7c5183b5559f822815761d2cfee33b12ea577aa1518cc8589d298e9"
+      "sha256": "1d5819fcdf7c21d561890c767499411eadd0024ac3bec43caa2ec7bd54d6fe3b"
     },
     {
       "path": "dist/cliDiscovery.js",
-      "sha256": "8f9b4a8c49ff474ce75d5ff261ef18d86ec73db373280a52a24a8329bcd55503"
+      "sha256": "d01f40ce330fad532f632075fd0ae506b422860f812612ffcffc382953a4af18"
     },
     {
       "path": "dist/client.d.ts",
@@ -42,11 +42,11 @@
     },
     {
       "path": "dist/cliGuidance.d.ts",
-      "sha256": "165f66670173f228d96ea663405b811e768e38d8f89cb93312c9118e257de4b9"
+      "sha256": "4aacfd0c361cc3569c673be0e81a0c8574c847f0c75a10560dc3e72bf7f9d670"
     },
     {
       "path": "dist/cliGuidance.js",
-      "sha256": "3eaea1a422316ff53831603a370693cfef4080026d5e68b35855d0ea5269255c"
+      "sha256": "244f6ddf2ae4b7ee295dcfaa1717beedc938a509f705314b5c2b90ff339a2b9d"
     },
     {
       "path": "dist/cliInspection.d.ts",
@@ -55,6 +55,14 @@
     {
       "path": "dist/cliInspection.js",
       "sha256": "c5dd13ab78457e8c503e18818c85dd85347625642e794b878d099d6bc6a10f8e"
+    },
+    {
+      "path": "dist/cliOrganizationKeyBootstrap.d.ts",
+      "sha256": "935033f8be40dbd92c815222083c0785e09a4abb500fb4477c256a66559c2735"
+    },
+    {
+      "path": "dist/cliOrganizationKeyBootstrap.js",
+      "sha256": "a70f4c8ac7cab24e551a3783ea38b132c3601fd59cb071e2478cca10aafb0233"
     },
     {
       "path": "dist/cliProviderLifecycle.d.ts",
@@ -258,11 +266,11 @@
     },
     {
       "path": "dist/tenantConsentBrowser.d.ts",
-      "sha256": "7e627e35390f8461a6fad123f915f67f54d28fc707c19ad95b60689aef604bc6"
+      "sha256": "6fc0843297cedbdf1342fccc0a2c280356860a39b80a7f38cee90637980ac0fa"
     },
     {
       "path": "dist/tenantConsentBrowser.js",
-      "sha256": "ef742e75ee44ba7db2e2032ea469fd551f44f7e91ea78ee3045230680267fd7f"
+      "sha256": "1d329ea5d4146a04e049170baafda56c661adfdf32d9bfc78f2a2017bb363cf1"
     },
     {
       "path": "dist/tenantStartFlow.d.ts",
@@ -289,5 +297,5 @@
       "sha256": "c29d3594690c781e06590537a3dc7852b31e54b19a7f3deb585a1b381a89afb4"
     }
   ],
-  "aggregate_sha256": "654051af0f5456585f4375477d662c377add254a09ad81886af344ce8d728673"
+  "aggregate_sha256": "a449a24c32505ed6bd34ed8adbda326aa4d0b8384fa8543f41fafc8628bb137a"
 }

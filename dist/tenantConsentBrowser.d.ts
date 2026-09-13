@@ -8,8 +8,10 @@ interface BrowserRuntime {
     launch?: Launch;
     timeoutMs?: number;
 }
-/** Request the OS browser, not consent itself. Never execute a shell or log its errors. */
+/** Open an already-validated hosted provider-consent URL. */
 export declare function openConsentBrowser(url: string, runtime?: BrowserRuntime): Promise<BrowserResult>;
+/** Open only a tokenized page on the CLI-owned IPv4 loopback server. */
+export declare function openOrganizationKeyBrowser(url: string, runtime?: BrowserRuntime): Promise<BrowserResult>;
 interface ConsentPresenterOptions {
     interactive: boolean;
     noBrowser: boolean;
