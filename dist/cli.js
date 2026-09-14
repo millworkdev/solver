@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Solver } from "./client.js";
@@ -14,7 +14,7 @@ import { createConsentPresenter } from "./tenantConsentBrowser.js";
 import { hostedConsentUrl } from "./tenantStartFlow.js";
 import { planByokChoice, byokChoice, resolveApprovedByokChoice, assertRecoveredByokChoice } from "./cliByokSelection.js";
 import { resolveProviderLifecycleCommand, runProviderLifecycle, providerLifecycleSummary, ProviderInspectionError } from "./cliProviderLifecycle.js";
-import { applicationSummary, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
+import { applicationSummary, readySetupRecovery, newSetupPlanOutput, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
 const cliArgs = process.argv.slice(2);
 const interactive = tenantStartIsInteractive(cliArgs, Boolean(input.isTTY), Boolean(output.isTTY));
 let writtenFiles;
@@ -174,7 +174,8 @@ async function chooseByokOffering(offerings) {
         rl.close();
     }
 }
-async function finishApplication(solver, initial) {
+async function finishApplication(solver, initial, recovered = false) {
+    const setupRecovery = recovered ? readySetupRecovery(initial, hasFlag(cliArgs, "--no-browser")) : undefined;
     let previous = "";
     const consent = createConsentPresenter({ interactive, noBrowser: hasFlag(cliArgs, "--no-browser"),
         explicitOpenBrowser: hasFlag(cliArgs, "--open-browser"),
@@ -189,7 +190,7 @@ async function finishApplication(solver, initial) {
         progress: (current) => {
             consent.progress(current);
             const marker = `${current.state}:${current.next_action.type}`;
-            if (interactive && marker !== previous) {
+            if (interactive && marker !== previous && !setupRecovery) {
                 process.stderr.write(`Application ${terminalText(current.application_id)}: ${terminalText(current.state)}\n${terminalText(current.next_action.detail)}\n`);
             }
             previous = marker;
@@ -199,7 +200,7 @@ async function finishApplication(solver, initial) {
             return confirm("Authorize this exact bounded live proof? [y/N] ");
         },
     });
-    const extras = { ...(writtenFiles ? { files: writtenFiles } : {}) };
+    const extras = { ...(setupRecovery ? { setup_recovery: setupRecovery } : {}), ...(writtenFiles ? { files: writtenFiles } : {}) };
     let selection;
     if (application.state === "ready" && application.managed_arm_id
         && application.selected_model_deployment_id) {
@@ -508,7 +509,7 @@ async function main() {
     const providerLifecycle = resolveProviderLifecycleCommand(args);
     const tenantStart = args[0] === "tenant" && args[1] === "start";
     if (tenantStart) {
-        const booleanFlags = new Set(["--write", "--plan", "--dry-run", "--json", "--no-browser", "--open-browser", "--yes"]);
+        const booleanFlags = new Set(["--write", "--plan", "--dry-run", "--json", "--no-browser", "--open-browser", "--yes", "--new-setup"]);
         const valueFlags = new Set([
             "--template",
             "--model-deployment-id",
@@ -538,6 +539,14 @@ async function main() {
             }
             process.stderr.write(`unknown argument: ${terminalText(argument)}\n`);
             process.exit(2);
+        }
+    }
+    const newSetup = hasFlag(args, "--new-setup");
+    if (newSetup) {
+        const conflicting = ["--application-id", "--resume-action", "--live-proof-digest", "--idempotency-key",
+            "--digest", "--issued-at", "--yes", "--plan", "--dry-run"].find(flag => hasFlag(args, flag));
+        if (cliArgs[0] !== "tenant" || !tenantStart || conflicting) {
+            throw new InspectionUsageError(`Use tenant start --new-setup${conflicting ? ` without ${conflicting}` : ""}. It requests a fresh plan; use the returned request key and approval command to apply or retry it.`);
         }
     }
     await prepareOrganizationKey(args, tenantStart);
@@ -625,7 +634,7 @@ async function main() {
         if (applicationId && !resumeAction && !liveProofDigest) {
             const saved = await solver.tenantTemplates.get(applicationId);
             assertRecoveredByokChoice(saved, byokFilter);
-            await finishApplication(solver, saved);
+            await finishApplication(solver, saved, true);
             return;
         }
         if (!applicationId || !resumeAction || !allowedResumeActions.has(resumeAction) || !idempotencyKey) {
@@ -657,7 +666,7 @@ async function main() {
     if (servedVariantId && !sourceId)
         throw new InspectionUsageError("--served-variant-id requires --source-id.");
     const defaultApplicationKey = idempotencyKey ? undefined : tenantStartKey(templateId, await authenticatedPrincipalId(solver));
-    const applicationKey = idempotencyKey ?? (sourceId
+    const applicationKey = newSetup ? `${defaultApplicationKey}:new:${randomUUID()}` : idempotencyKey ?? (sourceId
         ? `${defaultApplicationKey}:${createHash("sha256").update(JSON.stringify(byokFilter)).digest("hex")}`
         : defaultApplicationKey);
     const modelDeploymentId = flagValue(args, "--model-deployment-id");
@@ -695,7 +704,8 @@ async function main() {
             await finishApplication(solver, application);
             return;
         }
-        const recovered = await solver.tenantTemplates.recover({ template_id: templateId, idempotency_key: applicationKey });
+        const recovered = newSetup ? { application: null }
+            : await solver.tenantTemplates.recover({ template_id: templateId, idempotency_key: applicationKey });
         if (recovered.application) {
             assertRecoveredByokChoice(recovered.application, byokFilter);
             if (modelDeploymentId && recovered.application.selected_model_deployment_id !== modelDeploymentId) {
@@ -704,8 +714,20 @@ async function main() {
             if (write)
                 await maybeWriteScaffold({ file_manifest: templateId === "pooled-open-model"
                         ? DEFAULT_POOL_FILE_MANIFEST : templateId === "starter" ? DEFAULT_FILE_MANIFEST : [] }, true);
-            await finishApplication(solver, recovered.application);
+            await finishApplication(solver, recovered.application, true);
             return;
+        }
+        if (newSetup && !interactive) {
+            const plan = templateId === "byok-open-model"
+                ? await planByokChoice(solver.tenantTemplates, { ...byokFilter, modelDeploymentId })
+                : await solver.tenantTemplates.plan(planInput);
+            if (plan)
+                emitJson(newSetupPlanOutput(plan, applicationKey, write));
+            process.exitCode = 2;
+            return;
+        }
+        if (newSetup && interactive) {
+            process.stderr.write(`New setup request key: ${terminalText(applicationKey)}\nKeep this key to retry with --idempotency-key if the response is lost.\n`);
         }
         if (!interactive) {
             if (templateId === "byok-open-model") {
