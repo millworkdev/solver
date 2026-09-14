@@ -321,8 +321,21 @@ export interface LifecycleEvent {
     at: string;
     [extra: string]: unknown;
 }
+/**
+ * `usd` records model usage, excluding Millwork's platform fee. Model usage
+ * is billed by Millwork or your provider, depending on the saved model.
+ * `platform_fee_usd` records Millwork's fee after any refund; it is zero for
+ * a test run or when Millwork returns the fee because the run failed before
+ * any model attempt.
+ */
+export interface ReceiptTotals {
+    usd: number;
+    platform_fee_usd: number;
+    runtime_s: number;
+}
 export interface Receipt {
     execution_id: string;
+    totals?: ReceiptTotals;
     [extra: string]: unknown;
 }
 export interface ReceiptListFilter {

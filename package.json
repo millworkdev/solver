@@ -1,6 +1,6 @@
 {
   "name": "@millwork/solver",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Millwork Solver TypeScript SDK -- typed client, idempotency, retries, and execution event polling.",
   "license": "Apache-2.0",
   "repository": {

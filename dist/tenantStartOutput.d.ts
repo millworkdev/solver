@@ -69,5 +69,14 @@ export interface TenantStartOutputExtras {
         written: string[];
         skipped_existing: string[];
     };
+    /** Set only when a CLI-derived request key conflicted and one fresh key was applied instead. */
+    retried_with_fresh_key?: true;
+    application_key?: string;
 }
+/**
+ * Model usage and Millwork's fee after refunds are separate receipt lines.
+ * Millwork or the provider bills model usage, depending on the saved model.
+ * A partial receipt never shows a made-up amount.
+ */
+export declare function receiptCostLines(receipt: Receipt | undefined): string[];
 export declare function applicationSummary(application: TenantTemplateApplication, extras: TenantStartOutputExtras): string;

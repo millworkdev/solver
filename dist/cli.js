@@ -5,6 +5,8 @@ import { stdin as input, stdout as output } from "node:process";
 import { Solver } from "./client.js";
 import { DEFAULT_API_BASE_URL, resolveDiscoveryCommand, safeBaseUrl } from "./cliDiscovery.js";
 import { cliApiError, safeErrorText } from "./cliGuidance.js";
+import { SolverApiError, SolverApiNetworkError } from "./errors.js";
+import { claimSetupRecovery, loadSetupRecovery, setupRequestHash, setupRecoveryCommand, SetupRecoveryStorageError } from "./cliSetupRecovery.js";
 import { bootstrapOrganizationKey, bootstrapOrganizationKeyInTerminal, loadStoredOrganizationKey } from "./cliOrganizationKeyBootstrap.js";
 import { inspectCommand, inspectionApiError, inspectionQualification, InspectionUsageError, resolveInspectionCommand } from "./cliInspection.js";
 import { qualificationFromApiError, qualificationFromPlan, qualifyMissingCredential, } from "./cliQualification.js";
@@ -14,10 +16,12 @@ import { createConsentPresenter } from "./tenantConsentBrowser.js";
 import { hostedConsentUrl } from "./tenantStartFlow.js";
 import { planByokChoice, byokChoice, resolveApprovedByokChoice, assertRecoveredByokChoice } from "./cliByokSelection.js";
 import { resolveProviderLifecycleCommand, runProviderLifecycle, providerLifecycleSummary, ProviderInspectionError } from "./cliProviderLifecycle.js";
-import { applicationSummary, readySetupRecovery, newSetupPlanOutput, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
+import { applicationSummary, receiptCostLines, readySetupRecovery, newSetupPlanOutput, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
 const cliArgs = process.argv.slice(2);
 const interactive = tenantStartIsInteractive(cliArgs, Boolean(input.isTTY), Boolean(output.isTTY));
 let writtenFiles;
+let freshApplicationKey;
+let setupRecoveryRecord;
 const authenticatedPrincipalIds = new WeakMap();
 function authenticatedPrincipalId(solver) {
     const cached = authenticatedPrincipalIds.get(solver);
@@ -112,7 +116,11 @@ async function prepareOrganizationKey(args, tenantStart) {
         process.stderr.write("Private local key setup is unavailable on this computer. No key was saved.\n");
     }
 }
-function emitQualification(qualification) {
+function emitQualification(qualification, error) {
+    if (setupRecoveryRecord) {
+        emitRecoveryFailure(error, qualification);
+        process.exit(1);
+    }
     if (interactive) {
         process.stdout.write(`Setup paused — ${terminalText(qualification.state)}.\nNext: ${terminalText(qualification.next_action.detail)}\n`);
         if (qualification.next_action.docs_url)
@@ -129,21 +137,89 @@ async function maybeWriteScaffold(plan, write) {
         return;
     writtenFiles = await writeApprovedScaffold(process.cwd(), plan.file_manifest);
 }
-async function applyApprovedPlan(solver, plan, write, idempotencyKey) {
+function isIdempotencyConflict(error) {
+    return error instanceof SolverApiError && error.status === 409 && error.type.split("/").pop() === "idempotency_conflict";
+}
+function approvedSetupRequest(plan, write) {
+    return { digest: plan.digest, issued_at: plan.issued_at, template_id: plan.template_id,
+        ...(plan.model_deployment_id ? { model_deployment_id: plan.model_deployment_id } : {}),
+        ...(plan.byok_offering || plan.byok_source ? { byok_offering: plan.byok_offering ?? byokChoice(plan.byok_source) } : {}), write };
+}
+async function recoveryScope(solver, derivedKey) {
+    return { apiBaseUrl: process.env.SOLVERAPI_BASE_URL ?? DEFAULT_API_BASE_URL,
+        principalId: await authenticatedPrincipalId(solver), derivedKey };
+}
+function retainSetupRecovery(record) {
+    setupRecoveryRecord = record;
+    freshApplicationKey = record.application_key;
+}
+function emitRecoveryFailure(error, qualification) {
+    if (!setupRecoveryRecord)
+        return;
+    const problem = error instanceof SolverApiError && typeof error.type !== "string" ? null : cliApiError(error);
+    // A missing response can be recovered with the identical approved request.
+    // A definite refusal or local blocker must be inspected before any new apply.
+    const uncertain = !qualification && (error === undefined || error instanceof SolverApiNetworkError
+        || (error instanceof SolverApiError && (!Number.isFinite(error.status) || error.status >= 500 || error.status === 408 || error.status === 429)));
+    const command = uncertain ? setupRecoveryCommand(setupRecoveryRecord)
+        : ["millwork", "tenant", "show", "--template", setupRecoveryRecord.request.template_id,
+            "--idempotency-key", setupRecoveryRecord.application_key, "--json"];
+    const detail = uncertain
+        ? "Setup could not finish. Its request key is saved. Continue the same request with this command; do not start another setup to recover it."
+        : "Setup is paused. Inspect the saved request with this read-only command, then address the reported problem before continuing. Do not repeat a rejected approval.";
+    const failure = problem ?? (error ? { error: "setup_blocked", detail: safeErrorText(error instanceof Error ? error.message : String(error)) } : {});
+    const nextAction = { type: uncertain ? "recover_setup" : "inspect_setup", command, detail };
+    if (interactive) {
+        if (problem)
+            process.stderr.write(`${problem.title}\n${problem.detail ?? ""}\n${(problem.errors ?? []).map(({ field, message }) => `${field}: ${message}`).join("\n")}\nRequest ID: ${problem.request_id}\n`);
+        else if (error)
+            process.stderr.write(`${failure.detail}\n`);
+        if (qualification)
+            process.stderr.write(`${terminalText(qualification.next_action.detail)}\n`);
+        else if (problem)
+            process.stderr.write(`${problem.next_action.detail}\n${problem.next_action.url}\n`);
+        process.stderr.write(`${detail}\nRequest key: ${terminalText(setupRecoveryRecord.application_key)}\nNext: ${command.map(value => "'" + terminalText(value).replaceAll("'", "'\\''") + "'").join(" ")}\n`);
+    }
+    else
+        emitJson({ ...failure, state: "action_required", retried_with_fresh_key: true,
+            application_key: setupRecoveryRecord.application_key, next_action: nextAction,
+            ...(qualification ? { qualification } : {}),
+            ...(problem ? { problem_next_action: problem.next_action } : {}) });
+    process.exitCode = 1;
+}
+async function applyApprovedPlan(solver, plan, write, idempotencyKey, keyDerivedByCli = false) {
     const blocked = qualificationFromPlan(plan);
     if (blocked)
         emitQualification(blocked);
-    const application = await solver.tenantTemplates.apply({
-        digest: plan.digest,
-        application_key: idempotencyKey,
-        issued_at: plan.issued_at,
-        template_id: plan.template_id,
-        ...(plan.model_deployment_id
-            ? { model_deployment_id: plan.model_deployment_id }
-            : {}),
-        ...(plan.byok_offering || plan.byok_source ? { byok_offering: plan.byok_offering ?? byokChoice(plan.byok_source) } : {}),
-        write,
-    }, { idempotencyKey: `tenant-apply:${createHash("sha256").update(JSON.stringify([idempotencyKey, plan.digest])).digest("hex")}` });
+    const request = approvedSetupRequest(plan, write);
+    const apply = (key) => solver.tenantTemplates.apply({ ...request, application_key: key }, { idempotencyKey: `tenant-apply:${createHash("sha256").update(JSON.stringify([key, plan.digest])).digest("hex")}` });
+    const scope = keyDerivedByCli ? await recoveryScope(solver, idempotencyKey) : undefined;
+    let saved = scope ? await loadSetupRecovery(scope) : undefined;
+    const useSaved = (record) => {
+        retainSetupRecovery(record);
+        if (record.request_sha256 !== setupRequestHash(request)) {
+            throw new Error("This setup key belongs to another approved request. Recover that request before starting a new setup.");
+        }
+        return record.application_key;
+    };
+    let application;
+    if (saved)
+        application = await apply(useSaved(saved));
+    else {
+        try {
+            application = await apply(idempotencyKey);
+        }
+        catch (error) {
+            if (!scope || !isIdempotencyConflict(error))
+                throw error;
+            // Commit the recovery identity before sending any request under it.
+            // Concurrent callers read the same complete record, retained after success.
+            saved = await claimSetupRecovery(scope, request);
+            const key = useSaved(saved);
+            process.stderr.write(`This request key conflicts with an earlier request. Retrying with a saved key.\nRequest key: ${terminalText(key)}\nIf you need to retry, use --idempotency-key '${terminalText(key)}' with the same request.\n`);
+            application = await apply(key);
+        }
+    }
     await maybeWriteScaffold(plan, write);
     return application;
 }
@@ -200,7 +276,8 @@ async function finishApplication(solver, initial, recovered = false) {
             return confirm("Authorize this exact bounded live proof? [y/N] ");
         },
     });
-    const extras = { ...(setupRecovery ? { setup_recovery: setupRecovery } : {}), ...(writtenFiles ? { files: writtenFiles } : {}) };
+    const extras = { ...(setupRecovery ? { setup_recovery: setupRecovery } : {}), ...(writtenFiles ? { files: writtenFiles } : {}),
+        ...(freshApplicationKey ? { retried_with_fresh_key: true, application_key: freshApplicationKey } : {}) };
     let selection;
     if (application.state === "ready" && application.managed_arm_id
         && application.selected_model_deployment_id) {
@@ -268,16 +345,23 @@ function resolveCatalogModel(rows, requested, deploymentId) {
     return candidates[0];
 }
 async function runPlannedModelApplication(solver, input) {
+    const saved = input.applicationKeyDerivedByCli ? await loadSetupRecovery(await recoveryScope(solver, input.applicationKey)) : undefined;
+    if (saved)
+        retainSetupRecovery(saved);
     const recovered = await solver.tenantTemplates.recover({
         template_id: input.templateId,
-        idempotency_key: input.applicationKey,
+        idempotency_key: saved?.application_key ?? input.applicationKey,
     });
     if (recovered.application) {
         if (input.modelDeploymentId
             && recovered.application.selected_model_deployment_id !== input.modelDeploymentId) {
             throw new InspectionUsageError("The saved application belongs to a different deployment. Use a different --idempotency-key.");
         }
-        await finishApplication(solver, recovered.application);
+        await finishApplication(solver, recovered.application, Boolean(saved));
+        return;
+    }
+    if (saved) {
+        emitRecoveryFailure();
         return;
     }
     if (!interactive) {
@@ -303,7 +387,7 @@ async function runPlannedModelApplication(solver, input) {
     const application = await applyApprovedPlan(solver, {
         ...plan,
         ...(plan.catalog_row ? { model_deployment_id: plan.catalog_row.deployment.model_deployment_id } : {}),
-    }, false, input.applicationKey);
+    }, false, input.applicationKey, input.applicationKeyDerivedByCli);
     await finishApplication(solver, application);
 }
 async function runModelUse(solver, args) {
@@ -313,11 +397,13 @@ async function runModelUse(solver, args) {
         throw new InspectionUsageError("usage: millwork models use <catalog-model> [--model-deployment-id <id>]");
     const row = resolveCatalogModel((await solver.modelCatalog.get()).models, requested, flagValue(args, "--model-deployment-id"));
     const templateId = row.connection.access_lane === "byok" ? "byok-open-model" : "pooled-open-model";
+    const explicitApplicationKey = flagValue(args, "--idempotency-key");
     await runPlannedModelApplication(solver, {
         templateId,
         modelDeploymentId: row.deployment.model_deployment_id,
-        applicationKey: flagValue(args, "--idempotency-key")
+        applicationKey: explicitApplicationKey
             ?? await defaultRequestKey(solver, `tenant-model-use:${row.deployment.model_deployment_id}`),
+        applicationKeyDerivedByCli: !explicitApplicationKey,
         approvalQuestion: (plan) => templateId === "byok-open-model"
             ? "Connect this customer-owned route, prove the exact new arm, and select it only after success? [y/N] "
             : `Test this exact hosted arm with a spending allowance of USD ${plan.maximum_spend_usd} and select it only after success? An in-flight model call can exceed its budget. [y/N] `,
@@ -478,7 +564,7 @@ async function runExecution(solver, args) {
     const result = current.status === "completed" ? await solver.executions.result(current.execution_id) : null;
     const receipt = await solver.receipts.get(current.execution_id);
     if (interactive)
-        process.stdout.write(`${result ? `${terminalText(result.final_text, true)}\n` : ""}Execution ${terminalText(current.execution_id)} — ${terminalText(current.status)}\nReceipt ${terminalText(current.execution_id)}\n`);
+        process.stdout.write(`${result ? `${terminalText(result.final_text, true)}\n` : ""}Execution ${terminalText(current.execution_id)} — ${terminalText(current.status)}\nReceipt ${terminalText(current.execution_id)}\n${receiptCostLines(receipt).map((line) => `${line}\n`).join("")}`);
     else
         emitJson({ operation: "run", execution: current, result, receipt });
     if (current.status !== "completed")
@@ -669,6 +755,9 @@ async function main() {
     const applicationKey = newSetup ? `${defaultApplicationKey}:new:${randomUUID()}` : idempotencyKey ?? (sourceId
         ? `${defaultApplicationKey}:${createHash("sha256").update(JSON.stringify(byokFilter)).digest("hex")}`
         : defaultApplicationKey);
+    // --new-setup keys already carry a random suffix, so only a plain derived key
+    // can collide with an earlier identical plan in the same organization.
+    const applicationKeyDerivedByCli = !idempotencyKey && !newSetup;
     const modelDeploymentId = flagValue(args, "--model-deployment-id");
     const planInput = {
         template_id: templateId,
@@ -700,12 +789,15 @@ async function main() {
                     : templateId === "byok-open-model"
                         ? []
                         : DEFAULT_FILE_MANIFEST,
-            }, write, applicationKey);
+            }, write, applicationKey, applicationKeyDerivedByCli);
             await finishApplication(solver, application);
             return;
         }
+        const saved = applicationKeyDerivedByCli ? await loadSetupRecovery(await recoveryScope(solver, applicationKey)) : undefined;
+        if (saved)
+            retainSetupRecovery(saved);
         const recovered = newSetup ? { application: null }
-            : await solver.tenantTemplates.recover({ template_id: templateId, idempotency_key: applicationKey });
+            : await solver.tenantTemplates.recover({ template_id: templateId, idempotency_key: saved?.application_key ?? applicationKey });
         if (recovered.application) {
             assertRecoveredByokChoice(recovered.application, byokFilter);
             if (modelDeploymentId && recovered.application.selected_model_deployment_id !== modelDeploymentId) {
@@ -715,6 +807,10 @@ async function main() {
                 await maybeWriteScaffold({ file_manifest: templateId === "pooled-open-model"
                         ? DEFAULT_POOL_FILE_MANIFEST : templateId === "starter" ? DEFAULT_FILE_MANIFEST : [] }, true);
             await finishApplication(solver, recovered.application, true);
+            return;
+        }
+        if (saved) {
+            emitRecoveryFailure();
             return;
         }
         if (newSetup && !interactive) {
@@ -750,7 +846,7 @@ async function main() {
                     const application = await applyApprovedPlan(solver, {
                         ...plan,
                         ...(plan.catalog_row ? { model_deployment_id: plan.catalog_row.deployment.model_deployment_id } : {}),
-                    }, write, applicationKey);
+                    }, write, applicationKey, applicationKeyDerivedByCli);
                     await finishApplication(solver, application);
                     return;
                 }
@@ -795,17 +891,27 @@ async function main() {
             ...(plan.catalog_row
                 ? { model_deployment_id: plan.catalog_row.deployment.model_deployment_id }
                 : {}),
-        }, write, applicationKey);
+        }, write, applicationKey, applicationKeyDerivedByCli);
         await finishApplication(solver, application);
     }
     catch (error) {
         const mapped = qualificationFromApiError(error);
         if (mapped)
-            emitQualification(mapped);
+            emitQualification(mapped, error);
         throw error;
     }
 }
 main().catch((error) => {
+    if (setupRecoveryRecord) {
+        emitRecoveryFailure(error, qualificationFromApiError(error) ?? undefined);
+        return;
+    }
+    if (error instanceof SetupRecoveryStorageError && !interactive) {
+        emitJson({ state: "action_required", error: "setup_recovery_unavailable",
+            next_action: { type: "recover_saved_setup", detail: error.message } });
+        process.exitCode = 1;
+        return;
+    }
     if (error instanceof ProviderInspectionError)
         emitQualification(error.qualification);
     const qualification = qualificationFromApiError(error);
