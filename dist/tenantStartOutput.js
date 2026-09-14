@@ -162,6 +162,20 @@ export function newSetupPlanOutput(plan, applicationKey, write) {
             : { type: "approve_plan", command,
                 detail: "Review this exact plan and its spending allowance. Run command only after approval. Keep application_key for retries; no application was created and no paid run was started." } };
 }
+function usdText(value) {
+    return typeof value === "number" && Number.isFinite(value) ? `USD ${value}` : "not reported by this server";
+}
+/**
+ * Model usage and Millwork's fee after refunds are separate receipt lines.
+ * Millwork or the provider bills model usage, depending on the saved model.
+ * A partial receipt never shows a made-up amount.
+ */
+export function receiptCostLines(receipt) {
+    const totals = receipt?.totals;
+    if (!totals || typeof totals !== "object")
+        return [];
+    return [`Model usage: ${usdText(totals.usd)}`, `Platform fee: ${usdText(totals.platform_fee_usd)}`];
+}
 export function applicationSummary(application, extras) {
     const ready = application.state === "ready" && application.result && application.receipt && extras.output && extras.execution_receipt;
     const echoOnly = application.template_id === "starter";
@@ -189,7 +203,7 @@ export function applicationSummary(application, extras) {
         lines.push("", "Result:", ...text.slice(0, 2000).split("\n").map((line) => `  ${line}`));
         if (text.length > 2000)
             lines.push("  [Preview truncated; --json returns the full result.]");
-        lines.push("", `Receipt: ${terminalText(application.receipt.receipt_id)}`, `Receipt API path: ${terminalText(application.receipt.href)}`, echoOnly ? "Verification: Echo only." : "Verification: output presence only; not semantic correctness.");
+        lines.push("", `Receipt: ${terminalText(application.receipt.receipt_id)}`, `Receipt API path: ${terminalText(application.receipt.href)}`, ...receiptCostLines(extras.execution_receipt), echoOnly ? "Verification: Echo only." : "Verification: output presence only; not semantic correctness.");
         const credit = extras.credit;
         lines.push(credit?.status === "available"
             ? `Account credit: USD ${credit.balance_usd} (current wallet; not a provider-cost settlement quote)`
