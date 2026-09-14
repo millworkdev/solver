@@ -1,3 +1,4 @@
+import type { ReadStream, WriteStream } from "node:tty";
 export type OrganizationKeyBootstrapResult = {
     state: "configured";
     apiKey: string;
@@ -30,4 +31,16 @@ export declare function saveOrganizationKey(apiKey: string, apiBaseUrl: string, 
  * contain it.
  */
 export declare function bootstrapOrganizationKey(options: BootstrapOptions): Promise<OrganizationKeyBootstrapResult>;
+interface TerminalBootstrapOptions extends StorageOptions {
+    apiBaseUrl: string;
+    input?: ReadStream;
+    output?: WriteStream;
+    write?: (message: string) => void;
+    validateKey?: BootstrapOptions["validateKey"];
+    saveKey?: BootstrapOptions["saveKey"];
+}
+/** The explicit local terminal alternative shares the browser's check and record. */
+export declare function bootstrapOrganizationKeyInTerminal(options: TerminalBootstrapOptions): Promise<OrganizationKeyBootstrapResult | {
+    state: "validation_unavailable";
+}>;
 export {};
