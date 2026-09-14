@@ -5,7 +5,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { Solver } from "./client.js";
 import { DEFAULT_API_BASE_URL, resolveDiscoveryCommand, safeBaseUrl } from "./cliDiscovery.js";
 import { cliApiError, safeErrorText } from "./cliGuidance.js";
-import { bootstrapOrganizationKey, loadStoredOrganizationKey } from "./cliOrganizationKeyBootstrap.js";
+import { bootstrapOrganizationKey, bootstrapOrganizationKeyInTerminal, loadStoredOrganizationKey } from "./cliOrganizationKeyBootstrap.js";
 import { inspectCommand, inspectionApiError, inspectionQualification, InspectionUsageError, resolveInspectionCommand } from "./cliInspection.js";
 import { qualificationFromApiError, qualificationFromPlan, qualifyMissingCredential, } from "./cliQualification.js";
 import { POOL_STARTER_CONFIG_PATH, STARTER_CONFIG_PATH, STARTER_ECHO_EXAMPLE_PATH, STARTER_POOL_EXAMPLE_PATH, writeApprovedScaffold, } from "./starterScaffold.js";
@@ -76,23 +76,31 @@ async function prepareOrganizationKey(args, tenantStart) {
         return;
     }
     const planning = hasFlag(args, "--plan") || hasFlag(args, "--dry-run");
-    if (!tenantStart || planning || hasFlag(args, "--no-browser")
-        || (!interactive && !hasFlag(args, "--open-browser")))
+    if (!tenantStart || planning)
         return;
     const environment = process.env;
     const remote = Boolean(environment.SSH_CONNECTION || environment.SSH_CLIENT || environment.SSH_TTY);
     const automated = Boolean(environment.CI && !["0", "false"].includes(environment.CI.toLowerCase()));
     const noDesktop = process.platform === "linux" && !environment.DISPLAY && !environment.WAYLAND_DISPLAY;
-    if (remote || automated || noDesktop)
+    const terminalEntry = hasFlag(args, "--no-browser");
+    if (automated)
         return;
-    process.stderr.write("Opening your browser to finish setup…\n");
-    const result = await bootstrapOrganizationKey({ apiBaseUrl: base.origin });
+    if (terminalEntry && (!interactive || cliArgs[0] !== "tenant"))
+        return;
+    if (!terminalEntry && ((!interactive && !hasFlag(args, "--open-browser")) || remote || noDesktop))
+        return;
+    if (!terminalEntry)
+        process.stderr.write("Opening your browser to finish setup…\n");
+    const result = await (terminalEntry ? bootstrapOrganizationKeyInTerminal : bootstrapOrganizationKey)({ apiBaseUrl: base.origin });
     if (result.state === "configured") {
         process.env.SOLVERAPI_API_KEY = result.apiKey;
         process.stderr.write("Key saved. Continuing setup…\n");
     }
     else if (result.state === "cancelled") {
         process.stderr.write("Millwork key setup cancelled. No key was saved.\n");
+    }
+    else if (result.state === "validation_unavailable") {
+        // The terminal prompt already displayed the shared account-check notice.
     }
     else if (result.state === "expired") {
         process.stderr.write("The private local setup page expired. No key was saved.\n");

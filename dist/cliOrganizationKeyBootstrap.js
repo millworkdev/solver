@@ -3,6 +3,8 @@ import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
+import { Writable } from "node:stream";
 import { Solver } from "./client.js";
 import { DEFAULT_API_BASE_URL, safeBaseUrl } from "./cliDiscovery.js";
 import { API_KEYS_URL } from "./cliGuidance.js";
@@ -144,13 +146,14 @@ function sendHtml(response, status, body, done) {
     *{box-sizing:border-box}html,body{min-width:320px;min-height:100%}body{min-height:100svh;margin:0;display:grid;grid-template-rows:64px minmax(0,1fr) 48px;color:var(--ink-1);background:var(--surface-0);font:15px/1.5 var(--font-sans)}a{color:inherit}.app-header{border-bottom:1px solid var(--border);background:var(--surface-1)}.app-header__inner,.page-footer__inner{width:min(1120px,calc(100% - 48px));height:100%;margin:0 auto;display:flex;align-items:center}.lockup{display:inline-flex;align-items:center;gap:10px}.lockup__mark{width:20px;height:20px}.lockup__word{font-size:17px;font-weight:600}.lockup__rule{width:1px;height:18px;background:var(--border)}.lockup__product,.label{font-family:var(--font-mono);font-weight:500}.lockup__product{font-size:11px}.label{font-size:13px;letter-spacing:.14em;text-transform:uppercase}main{width:min(1120px,calc(100% - 48px));margin:0 auto;padding:64px 0}.handoff{max-width:920px;margin:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-1);overflow:hidden}.handoff__intro{padding:40px}.state-line{display:flex;gap:12px;align-items:center;margin:0 0 20px;color:var(--ink-2)}.state-line__mark{color:var(--info)}h1{font-size:36px;line-height:1.15;margin:0 0 20px}.lede,p{color:var(--ink-2);line-height:1.55}.lede{font-size:18px;max-width:760px}.notice{color:var(--err)}.credential-form{border-top:1px solid var(--border);padding:32px 40px 40px;display:grid;gap:14px}.credential-form label{font-size:17px;font-weight:600}.credential-form input{width:100%;min-height:52px;padding:12px;border:1px solid var(--border-strong);border-radius:var(--radius);background:var(--surface-1);font:16px var(--font-sans)}.credential-form input:focus-visible,.button:focus-visible,a:focus-visible{outline:2px solid var(--brand);outline-offset:2px}.form-hint{margin:0;font-size:14px}.actions{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-top:10px}.button{min-height:48px;padding:12px 20px;border:0;border-radius:var(--radius);background:var(--ink-1);color:#fff;font:600 16px var(--font-sans);cursor:pointer}.button--secondary{background:var(--surface-2);color:var(--ink-1);border:1px solid var(--border)}.text-link{color:#2f61a5;text-decoration:none}.assurance{margin:8px 0 0;font-size:14px}.assurance strong{color:var(--ink-1)}.page-footer{border-top:1px solid var(--border);color:var(--ink-2);font-size:12px}@media(max-width:767px){main{width:min(1120px,calc(100% - 28px));padding:28px 0}.handoff__intro,.credential-form{padding:24px}h1{font-size:30px}}
   </style></head><body><header class="app-header"><div class="app-header__inner"><div class="lockup" aria-label="Millwork Solver"><svg class="lockup__mark" viewBox="0 0 64 64" aria-hidden="true"><polygon points="10,10 32,10 27,54 10,54" fill="#c02a2a"></polygon><polygon points="38,16 54,16 54,60 33,60" fill="#c02a2a"></polygon></svg><span class="lockup__word">Millwork</span><span class="lockup__rule" aria-hidden="true"></span><span class="lockup__product">Solver</span></div></div></header><main><section class="handoff" aria-labelledby="page-title"><div class="handoff__intro">${body}</div></section></main><footer class="page-footer"><div class="page-footer__inner">© Thinking Oracle Inc.</div></footer></body></html>`, done);
 }
+const keyNotices = {
+    invalid: "Enter a Millwork organization API key.",
+    rejected: "This key wasn’t accepted. Check it in the Millwork dashboard and try again.",
+    unavailable: "We couldn’t reach Millwork. Check your connection and try again.",
+    save_failed: "Your key was accepted, but we couldn’t save it. Check that you can write to ~/.millwork and try again.",
+};
 function form(notice) {
-    const messages = {
-        invalid: "Enter a Millwork organization API key.",
-        rejected: `This key wasn’t accepted. Check it in the <a class="text-link" href="${API_KEYS_URL}" target="_blank" rel="noopener noreferrer">Millwork dashboard</a> and try again.`,
-        unavailable: "We couldn’t reach Millwork. Check your connection and try again.",
-        save_failed: "Your key was accepted, but we couldn’t save it. Check that you can write to ~/.millwork and try again.",
-    };
+    const messages = { ...keyNotices, rejected: keyNotices.rejected.replace("Millwork dashboard", `<a class="text-link" href="${API_KEYS_URL}" target="_blank" rel="noopener noreferrer">Millwork dashboard</a>`) };
     return `<p class="state-line label"><span class="state-line__mark" aria-hidden="true">◆</span><span>Setup</span></p><h1 id="page-title">Continue setup</h1><p class="lede">Enter a key from the organization you want to use.</p>${notice ? `<p class="notice" role="alert">${messages[notice]}</p>` : ""}<form class="credential-form" method="post" autocomplete="off"><label for="api_key">Millwork organization API key</label><input id="api_key" name="api_key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="8192"><p class="form-hint">Find or create a key in <a class="text-link" href="${API_KEYS_URL}" target="_blank" rel="noopener noreferrer">Millwork dashboard → API keys <span aria-hidden="true">↗</span></a>.</p><p class="form-hint">Your key will be saved on this computer for future commands.</p><div class="actions"><button class="button" name="action" value="save" type="submit">Save and continue <span aria-hidden="true">→</span></button><button class="button button--secondary" name="action" value="cancel" type="submit" formnovalidate>Cancel</button></div></form>`;
 }
 async function readBody(request) {
@@ -452,4 +455,80 @@ export async function bootstrapOrganizationKey(options) {
                 requestNoSaveSettlement({ state: "browser_unavailable" });
         });
     });
+}
+/** The explicit local terminal alternative shares the browser's check and record. */
+export async function bootstrapOrganizationKeyInTerminal(options) {
+    const input = options.input ?? process.stdin;
+    const output = options.output ?? process.stdout;
+    const base = safeBaseUrl(options.apiBaseUrl);
+    if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function" || !base.valid || !base.origin) {
+        return { state: "storage_unavailable" };
+    }
+    const write = options.write ?? ((message) => { process.stderr.write(message); });
+    // Readline owns raw mode, but every edit/redraw goes to a sink: neither the
+    // terminal driver nor readline may echo a credential, including pasted input.
+    const wasRaw = input.isRaw;
+    const muted = new Writable({ write(_chunk, _encoding, done) { done(); } });
+    const reader = createInterface({ input, output: muted, terminal: true, historySize: 0 });
+    const cancellation = new AbortController();
+    const cancel = () => cancellation.abort();
+    reader.on("SIGINT", cancel);
+    reader.on("close", cancel);
+    process.on("SIGINT", cancel);
+    try {
+        while (!cancellation.signal.aborted) {
+            const answer = reader.question("", { signal: cancellation.signal });
+            write("Millwork organization API key (hidden; Enter to cancel): ");
+            let apiKey;
+            try {
+                apiKey = await answer;
+            }
+            catch {
+                return { state: "cancelled" };
+            }
+            write("\n");
+            if (!apiKey || cancellation.signal.aborted)
+                return { state: "cancelled" };
+            if (!validKey(apiKey)) {
+                write(`${keyNotices.invalid}\n`);
+                continue;
+            }
+            write("Checking your Millwork key…\n");
+            let validation;
+            try {
+                validation = await (options.validateKey ?? defaultValidation)(apiKey, base.origin);
+            }
+            catch {
+                validation = "unavailable";
+            }
+            // Ctrl+C during the account call must win before any durable write.
+            if (cancellation.signal.aborted)
+                return { state: "cancelled" };
+            if (validation === "rejected") {
+                write(`${keyNotices.rejected}\n`);
+                continue;
+            }
+            if (validation !== "accepted") {
+                write(`${keyNotices.unavailable}\n`);
+                return { state: "validation_unavailable" };
+            }
+            // As with the browser path, once atomic storage begins, report its actual
+            // outcome; a later interrupt cannot truthfully claim no key was saved.
+            try {
+                await (options.saveKey ?? ((key, url) => saveOrganizationKey(key, url, options)))(apiKey, base.origin);
+            }
+            catch {
+                write(`${keyNotices.save_failed}\n`);
+                return { state: "storage_unavailable" };
+            }
+            return { state: "configured", apiKey };
+        }
+        return { state: "cancelled" };
+    }
+    finally {
+        reader.close();
+        process.removeListener("SIGINT", cancel);
+        input.setRawMode(wasRaw);
+        muted.destroy();
+    }
 }
