@@ -126,15 +126,54 @@ export async function readCreditSummary(read) {
         return { status: "unavailable" };
     }
 }
+/** A recovered ready application is historical success, not a newly submitted run. */
+export function readySetupRecovery(application, noBrowser = false) {
+    if (application.state !== "ready")
+        return undefined;
+    const completed = application.completed_effects.find(effect => effect.id === "live_result_ready")?.at;
+    const requested = application.diagnostics.requested;
+    const model = application.result?.model_provenance?.requested?.model_key ?? requested?.model_key;
+    return {
+        type: "existing_ready_setup",
+        application_id: application.application_id,
+        completed_at: completed && Number.isFinite(Date.parse(completed)) ? completed : null,
+        model_key: typeof model === "string" ? model : null,
+        model_deployment_id: application.selected_model_deployment_id,
+        new_setup: {
+            command: ["millwork", "tenant", "start", "--new-setup", "--template", application.template_id,
+                ...(noBrowser ? ["--no-browser"] : [])],
+            detail: "Review a fresh setup plan. A new setup still requires approval; this flag does not approve spending.",
+        },
+    };
+}
+export function newSetupPlanOutput(plan, applicationKey, write) {
+    const choice = plan.byok_source;
+    const ambiguous = plan.template_id === "byok-open-model" && !choice;
+    const blocked = plan.qualification.state !== "approved" || plan.blockers.length > 0;
+    const command = ["millwork", "tenant", "start", "--template", plan.template_id,
+        "--idempotency-key", applicationKey, "--digest", plan.digest, "--issued-at", plan.issued_at,
+        ...(plan.catalog_row ? ["--model-deployment-id", plan.catalog_row.deployment.model_deployment_id] : []),
+        ...(choice ? ["--source-id", choice.source_id, "--served-variant-id", choice.served_variant_id,
+            ...(choice.source_id === "aws_bedrock" ? ["--auth-scheme", choice.auth_scheme] : [])] : []), ...(write ? ["--write"] : []), "--json"];
+    return { state: "action_required", application_key: applicationKey, plan,
+        next_action: ambiguous || blocked
+            ? { type: ambiguous ? "choose_provider_model" : "review_blockers",
+                detail: "Resolve the plan's choices or blockers, then request a fresh plan. No application was created and no paid run was started." }
+            : { type: "approve_plan", command,
+                detail: "Review this exact plan and its spending allowance. Run command only after approval. Keep application_key for retries; no application was created and no paid run was started." } };
+}
 export function applicationSummary(application, extras) {
     const ready = application.state === "ready" && application.result && application.receipt && extras.output && extras.execution_receipt;
     const echoOnly = application.template_id === "starter";
     const echoReady = echoOnly && ["echo_proved", "ready"].includes(application.state) && application.receipt;
     const pending = ["applying", "live_queued", "live_running"].includes(application.state);
-    const lines = [echoReady ? "Echo starter complete — no live model run."
+    const recovery = extras.setup_recovery;
+    const lines = [recovery ? "This setup was already complete. Showing the saved result; no new model run was started." : echoReady ? "Echo starter complete — no live model run."
             : ready ? "First live result ready."
                 : `Setup ${pending ? "in progress" : "paused"} — ${terminalText(application.state)}.`,
         `Application: ${terminalText(application.application_id)}`];
+    if (recovery)
+        lines.push(`Completed: ${terminalText(recovery.completed_at ?? "not reported by this server")}`, `Saved model: ${terminalText(recovery.model_key ?? "not reported by this server")}`, `Start a new setup: ${recovery.new_setup.command.map(argument => /^[A-Za-z0-9_-]+$/.test(argument) ? argument : `'${terminalText(argument).replace(/'/g, "'\\''")}'`).join(" ")}`, recovery.new_setup.detail);
     if (application.managed_arm_id)
         lines.push(`Arm: ${terminalText(application.managed_arm_id)}`);
     if (application.source_connection_id)

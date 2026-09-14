@@ -34,7 +34,34 @@ export type CreditSummary = {
 };
 /** Do not emit billing emails, ledger activity, or a guessed zero on failure. */
 export declare function readCreditSummary(read: () => Promise<Account>): Promise<CreditSummary>;
+/** A recovered ready application is historical success, not a newly submitted run. */
+export declare function readySetupRecovery(application: TenantTemplateApplication, noBrowser?: boolean): {
+    type: "existing_ready_setup";
+    application_id: string;
+    completed_at: string | null;
+    model_key: string | null;
+    model_deployment_id: string | null;
+    new_setup: {
+        command: string[];
+        detail: string;
+    };
+} | undefined;
+export declare function newSetupPlanOutput(plan: TenantTemplatePlan, applicationKey: string, write: boolean): {
+    state: string;
+    application_key: string;
+    plan: TenantTemplatePlan;
+    next_action: {
+        type: string;
+        detail: string;
+        command?: undefined;
+    } | {
+        type: string;
+        command: string[];
+        detail: string;
+    };
+};
 export interface TenantStartOutputExtras {
+    setup_recovery?: ReturnType<typeof readySetupRecovery>;
     output?: ExecutionResult;
     execution_receipt?: Receipt;
     credit?: CreditSummary;
