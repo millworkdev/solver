@@ -59,6 +59,50 @@ for (const [name, sample] of [
   });
 }
 
+test("the kit's reserved placeholder hosts are legal and their lookalikes are not", () => {
+  for (const url of [
+    "https://app.example",
+    "https://app.example/millwork-check",
+    "https://app.example/healthz",
+    "http://existing-app.invalid",
+    "http://127.0.0.1:${port}/",
+  ]) {
+    assert.deepEqual(scanTextContent("dist/kit/README.md", url, existsAlways), [], url);
+  }
+  // Each is admitted at its exact path on an exact reserved name. A
+  // lookalike, another path, or a concrete loopback destination is not.
+  for (const url of [
+    "https://app.example.com/millwork-check",
+    "https://app.example/admin",
+    "https://app.example/millwork-check/../admin",
+    "https://existing-app.invalid.attacker.test/",
+    "http://existing-app.invalid/exfiltrate",
+    "http://127.0.0.1:49152/private",
+    "http://127.0.0.2:${port}/",
+  ]) {
+    onlyFailure(scanTextContent("dist/kit/README.md", url, existsAlways), "disallowed-url");
+  }
+});
+
+test("an exact absolute host path is allowed; a repository-relative lookalike is not", () => {
+  const naming = 'const BOUNDARY = "/etc/millwork/run-authorization-boundary.json";';
+  assert.deepEqual(scanTextContent("dist/runAuthorizationBoundary.js", naming, existsNever), []);
+  // Without the leading slash it claims a file in this repository.
+  onlyFailure(
+    scanTextContent("dist/runAuthorizationBoundary.js", 'read("etc/millwork/run-authorization-boundary.json")', existsNever),
+    "nonpublic-reference",
+  );
+  // A different absolute path is not admitted by the allowance.
+  onlyFailure(
+    scanTextContent("dist/runAuthorizationBoundary.js", 'read("/etc/millwork/other-file.json")', existsNever),
+    "nonpublic-reference",
+  );
+  onlyFailure(
+    scanTextContent("dist/runAuthorizationBoundary.js", 'read("/etc/attacker/run-authorization-boundary.json")', existsNever),
+    "nonpublic-reference",
+  );
+});
+
 test("legacy BYOK wording fails closed", () => {
   onlyFailure(scanTextContent("dist/example.js", "the BYOK binding", existsAlways), "legacy-byok-wording");
 });

@@ -26,6 +26,13 @@ export class VerifiersResource {
     async get(verifierId) {
         return this.http.request({ method: "GET", path: `verifiers/${encodeURIComponent(verifierId)}` });
     }
+    /** Read the verifier connection state without changing it. The response never includes key material. */
+    async connection(verifierId) {
+        return this.http.request({
+            method: "GET",
+            path: `verifiers/${encodeURIComponent(verifierId)}/connection`,
+        });
+    }
     /** PATCH echoes the full updated verifier; `revision` bumps on update. */
     async update(verifierId, input, opts) {
         return this.http.request({

@@ -27,9 +27,16 @@ if (JSON.stringify(packedFiles) !== JSON.stringify(allowedPackedFiles)) {
   if (missing.length > 0) failures.push(`exported files missing from the pack: ${missing.join(", ")}`);
 }
 
+// The manifest version is the version of the artifact assembled here -- the
+// publication candidate. Whether that version exists on the registry, and
+// which tag points at it, is a separate fact established by a registry
+// observation, not by this check.
+const CANDIDATE_VERSION = "0.1.16";
 const manifest = JSON.parse(readFileSync(resolve(repositoryRoot, "package.json"), "utf8"));
 if (manifest.name !== "@millwork/solver") failures.push(`manifest name is ${manifest.name}`);
-if (manifest.version !== "0.1.15") failures.push(`manifest version must be 0.1.15, got ${manifest.version}`);
+if (manifest.version !== CANDIDATE_VERSION) {
+  failures.push(`candidate version must be ${CANDIDATE_VERSION}, got ${manifest.version}`);
+}
 if (manifest.repository?.url !== "git+https://github.com/millworkdev/solver.git") {
   failures.push(`manifest repository does not name this exact public repository: ${manifest.repository?.url}`);
 }
@@ -48,4 +55,7 @@ if (failures.length > 0) {
   process.stderr.write(`${failures.map((failure) => `FAIL ${failure}`).join("\n")}\n`);
   process.exit(1);
 }
-process.stdout.write(`packed-file check ok (${packedFiles.length} files, version ${manifest.version}, CLI present)\n`);
+process.stdout.write(
+  `packed-file check ok (${packedFiles.length} files, candidate version ${manifest.version}, CLI present); `
+  + "this says nothing about what is published on the registry\n",
+);

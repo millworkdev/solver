@@ -1,5 +1,23 @@
 import type { Account, ExecutionResult, Receipt, TenantTemplateApplication, TenantTemplatePlan } from "./types.js";
 export declare const TENANT_START_OUTPUT_VERSION = "millwork.tenant-start.v1";
+export declare const TENANT_START_VERIFIER_CONNECT_COMMAND: readonly ["millwork", "verifier", "connect", "--endpoint", "<https-url>", "--access", "public", "--connect-only"];
+export interface TenantStartVerificationOnward {
+    status: "no_check_connected";
+    activity: "platform_baseline" | "platform_echo";
+    detail: string;
+    next_action: {
+        type: "connect_verifier";
+        command: string[];
+        guide_url: "https://docs.getmillwork.dev/guides/connect-an-output-check";
+        detail: string;
+    };
+}
+/**
+ * Tenant-start receipts use Millwork's built-in presence baseline (or Echo for
+ * the starter template). Neither is a customer check. Keep that fact beside the
+ * completed receipt and provide an explicit, non-executing onward command.
+ */
+export declare function tenantStartVerificationOnward(application: TenantTemplateApplication): TenantStartVerificationOnward | undefined;
 export declare function tenantStartIsInteractive(args: string[], stdinTTY: boolean, stdoutTTY: boolean): boolean;
 export declare function planCostSummary(plan: TenantTemplatePlan): string;
 /** Agents hand over a safe application ID; never copy approval URLs to chat. */
@@ -72,6 +90,7 @@ export interface TenantStartOutputExtras {
     /** Set only when a CLI-derived request key conflicted and one fresh key was applied instead. */
     retried_with_fresh_key?: true;
     application_key?: string;
+    verification?: TenantStartVerificationOnward;
 }
 /**
  * Model usage and Millwork's fee after refunds are separate receipt lines.
