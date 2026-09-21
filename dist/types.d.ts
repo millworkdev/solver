@@ -64,6 +64,85 @@ export interface VerifierScoring {
     correctness: "boolean_anchors";
     quality: "scalar_0_1";
 }
+export type VerifierConnectionStatus = "unbound" | "active" | "revoked" | "expired" | "unknown";
+export type VerifierConnectionStopReason = "revoked" | "origin_invalidated" | "stop_date";
+export interface VerifierConnectionSummary {
+    /** active is connected; revoked is disconnected in Millwork; expired means the Millwork stop date passed; unbound has no connected key; unknown could not be confirmed. */
+    status: VerifierConnectionStatus;
+    /** When Millwork is scheduled to stop using the key, or null when no stop is scheduled. */
+    stop_at: string | null;
+    /** Time zone used to choose the stop date, or null when no stop is scheduled. */
+    stop_time_zone: string | null;
+    /** Whole days until the scheduled stop, or null when no stop is scheduled. */
+    days_remaining: number | null;
+    /** When Millwork actually stopped using the key, or null while active or never connected. */
+    stopped_at: string | null;
+    /** Why use stopped: manual disconnect, endpoint-address change, or scheduled stop. */
+    stop_reason: VerifierConnectionStopReason | null;
+}
+/** Secretless GET /v1/verifiers/{id}/connection response. */
+export interface VerifierConnectionView extends VerifierConnectionSummary {
+    handle: string | null;
+    origin: string | null;
+    generation: number | null;
+    projection_ack: string | null;
+    pending_key: {
+        handle: string;
+        captured_generation: number;
+        staged_until: string;
+    } | null;
+    last_test: {
+        outcome: "passed" | "failed";
+        handle: string;
+        reason: string | null;
+        at: string;
+    } | null;
+    replacement: {
+        status: "pending";
+        handle: string;
+        staged_until: string;
+    } | {
+        status: "failed";
+        handle: string;
+        reason: string | null;
+        at: string;
+    } | null;
+    retired_keys: Array<{
+        handle: string;
+        state: "scheduled_for_destruction" | "destroyed";
+        reason: string | null;
+        retired_at: string | null;
+        destroyed_at: string | null;
+    }>;
+    last_operation?: {
+        kind?: string;
+        phase?: string | null;
+        generation?: number;
+        resulting_state?: Record<string, unknown>;
+        recorded_at?: string;
+        status?: "unknown";
+    } | null;
+}
+/**
+ * The tenant's own declaration about a verifier's correctness method
+ * It is self-reported and not independently verified: it never gates
+ * dispatch and is not part of `hash`. Only deterministic correctness can be
+ * declared.
+ */
+export type VerifierCorrectnessDeclarationMethod = "deterministic";
+export interface VerifierCorrectnessDeclarationInput {
+    method: VerifierCorrectnessDeclarationMethod;
+}
+/** Verifiers registered before declarations existed read as not declared. */
+export type VerifierCorrectnessDeclaration = {
+    status: "not_declared";
+    statement: "Not declared";
+} | {
+    status: "declared";
+    method: VerifierCorrectnessDeclarationMethod;
+    declared_at: string;
+    statement: "Tenant declared deterministic correctness; not independently verified";
+};
 export interface Verifier {
     verifier_id: string;
     display_name: string;
@@ -73,6 +152,10 @@ export interface Verifier {
     input_data_classes: DataClass[];
     scoring: VerifierScoring;
     hash: string;
+    /** Absent only from a server that predates declarations; never read absence as declared. */
+    correctness_declaration?: VerifierCorrectnessDeclaration;
+    /** Absent only from a server that predates connection summaries; never infer a connection state from absence. */
+    connection?: VerifierConnectionSummary;
     [extra: string]: unknown;
 }
 export interface VerifierWrite {
@@ -82,6 +165,8 @@ export interface VerifierWrite {
     endpoint: ArmEndpoint;
     input_data_classes: DataClass[];
     scoring: VerifierScoring;
+    /** Optional. Omitted or null registers the verifier as not declared. */
+    correctness_declaration?: VerifierCorrectnessDeclarationInput | null;
 }
 export interface VerifierListFilter {
     cursor?: string;
@@ -208,6 +293,7 @@ export interface TenantTemplatePlan {
         };
         fallback_policy: "none";
         verifier: "platform.echo" | "platform.output_presence";
+        on_eval?: Array<"gate" | "fallback" | "repair_retry">;
     } | null;
     starter_credit: {
         balance_usd: number;
@@ -288,6 +374,7 @@ export interface TenantModelSelection {
         };
         fallback_policy: "none";
         verifier: "platform.output_presence";
+        on_eval?: Array<"gate" | "fallback" | "repair_retry">;
     };
     proof_execution_id: string;
     selected_at: string;
@@ -311,6 +398,8 @@ export interface Execution {
     [extra: string]: unknown;
 }
 export interface LifecycleEvent {
+    verification_check?: VerificationCheck;
+    recorded_check?: ReceiptRecordedCheck;
     event_id: string;
     execution_id: string;
     slice_id?: string;
@@ -333,8 +422,116 @@ export interface ReceiptTotals {
     platform_fee_usd: number;
     runtime_s: number;
 }
+/**
+ * The declaration as it stood when a slice was evaluated, taken from
+ * the snapshot recorded with that evaluation. Absent for evaluations recorded
+ * before declarations existed, for the built-in output-presence baseline and
+ * for Echo; absence is not a declaration either way.
+ */
+export type ReceiptCorrectnessDeclaration = {
+    status: "not_declared";
+    verifier_revision: number;
+    statement: "Not declared";
+} | {
+    status: "declared";
+    method: VerifierCorrectnessDeclarationMethod;
+    declared_at: string;
+    verifier_revision: number;
+    statement: "Tenant declared deterministic correctness; not independently verified";
+};
+export interface ReceiptSliceVerifier {
+    id: string;
+    hash: string;
+    verifier_id: string | null;
+    is_correct: boolean;
+    quality_score: number;
+    anchor_results?: Record<string, boolean>;
+    correctness_declaration?: ReceiptCorrectnessDeclaration;
+    [extra: string]: unknown;
+}
+export interface ReceiptSlice {
+    slice_id: string;
+    capability: string;
+    verifier?: ReceiptSliceVerifier;
+    verification_checks?: VerificationCheck[];
+    recorded_check?: ReceiptRecordedCheck;
+    acted_on_eval?: ReceiptActedOnEval;
+    [extra: string]: unknown;
+}
+export interface ReceiptActedOnEval {
+    action: "gate" | "fallback" | "repair_retry";
+    outcome: "passed_gate" | "fell_back" | "repair_accepted" | "repair_rejected" | "proposal_created";
+    proposal_id?: string;
+}
+export interface VerificationCheck {
+    check_id: string;
+    verifier_id: string | null;
+    verifier_hash: string | null;
+    activity: "customer" | "platform_baseline" | "platform_echo" | "unknown";
+    arm_id: string | null;
+    attempt: number | null;
+    phase: "candidate" | "skill_baseline" | "skill_repair";
+    outcome: "valid_verdict" | "technical_failure";
+    failure_class: "authentication" | "credential_unavailable" | "timeout" | "network" | "egress_rejected" | "response_too_large" | "http_error" | "invalid_response" | "internal" | null;
+    is_correct: boolean | null;
+    quality_score: number | null;
+}
+/**
+ * A check fact recorded for this slice. On a receipt this is the latest valid
+ * recorded-check event. If absent, no recorded fact is provided — do not infer
+ * a verdict or a pending evaluation from absence.
+ *
+ * `customer_verdict`: returned verdict; read `is_correct` for pass or rejection.
+ * `customer_unavailable`: check failure without a correctness verdict.
+ * `baseline`: built-in output-presence check; `customer_check_selected: false`
+ * does not say whether other checks are configured.
+ * `platform_test`: Echo test.
+ * `pending_evaluation`: pending at `recorded_at`; read run status separately.
+ * `terminal_no_evaluation`: the slice ended without attempting a new evaluation
+ * and is omitted when a durable evaluation fact already exists.
+ * `missing_evidence`: evaluation evidence is missing. It provides no verdict
+ * and does not identify the cause.
+ * `unknown_evidence`: reserved; runtime writers do not currently emit it.
+ */
+export type ReceiptRecordedCheck = ({
+    state: "customer_verdict";
+    verifier_id: string;
+    check_id: string | null;
+    is_correct: boolean;
+    quality_score: number;
+    anchor_results?: Record<string, boolean>;
+} | {
+    state: "customer_unavailable";
+    attempted_verifier_id: string;
+    check_id: string | null;
+    failure_class: Exclude<VerificationCheck["failure_class"], null>;
+} | {
+    state: "baseline";
+    customer_check_selected: false;
+    verifier_id: "vrf_builtin_baseline";
+    output_present: boolean;
+} | {
+    state: "platform_test";
+    identity: "platform.echo";
+} | {
+    state: "pending_evaluation";
+    pending: true;
+    execution_id: string;
+} | {
+    state: "terminal_no_evaluation";
+    no_evaluation_attempted: true;
+    reason: string;
+} | {
+    state: "missing_evidence" | "unknown_evidence";
+    execution_id: string;
+    lifecycle_state: LifecycleState;
+}) & {
+    /** When this fact was recorded, rather than when the receipt was retrieved. */
+    recorded_at: string;
+};
 export interface Receipt {
     execution_id: string;
+    slices?: ReceiptSlice[];
     totals?: ReceiptTotals;
     [extra: string]: unknown;
 }
@@ -710,6 +907,21 @@ export interface VerifierProbeReport {
     http_status: number | null;
     /** Null when the endpoint was unreachable (no response to check). */
     contract: VerifierContractCheck | null;
+    /** Host / auth / response-body classes with a correction for the failed class. */
+    feedback: {
+        reachability: {
+            status: "ok" | "failed" | "not_checked";
+            correction: string | null;
+        };
+        authentication: {
+            status: "ok" | "failed" | "not_checked";
+            correction: string | null;
+        };
+        response_compatibility: {
+            status: "ok" | "failed" | "not_checked";
+            correction: string | null;
+        };
+    };
     detail: string | null;
     checked_at: string;
 }
@@ -718,6 +930,7 @@ export interface VerifierTestReport {
     status: "ready" | "degraded";
     status_reason: string | null;
     probe: VerifierProbeReport;
+    correctness_declaration: VerifierCorrectnessDeclaration;
 }
 /** POST /v1/verifiers answers a registration OUTCOME, not the full wire --
  * the status is decided by the registration probe, never a default. */
@@ -727,6 +940,7 @@ export interface VerifierRegistrationOutcome {
     status: "ready" | "degraded";
     status_reason: string | null;
     preflight: VerifierProbeReport;
+    correctness_declaration: VerifierCorrectnessDeclaration;
 }
 export interface ArmEndpointProbeOutcome {
     reachable: boolean;
@@ -748,6 +962,9 @@ export interface VerifierUpdate {
     display_name?: string;
     version?: string;
     endpoint?: ArmEndpoint;
+    /** Omitted leaves the declaration unchanged; null withdraws it. Setting only
+     *  this field bumps `revision` and never changes `hash`. */
+    correctness_declaration?: VerifierCorrectnessDeclarationInput | null;
 }
 export interface EvalSummary {
     window: {
@@ -756,11 +973,16 @@ export interface EvalSummary {
     };
     pass_rate_trend: Array<{
         day: string;
-        verifier_id: string;
+        verifier_id: string | null;
+        activity?: "customer" | "platform_baseline" | "platform_echo" | "unknown";
+        attempted_checks?: number;
+        valid_customer_verdicts?: number;
+        technical_failures?: number;
+        coverage?: number | null;
         total: number;
         passed: number;
-        pass_rate: number;
-        mean_quality_score: number;
+        pass_rate: number | null;
+        mean_quality_score: number | null;
     }>;
     repair_history: Array<{
         proposal_id: string;

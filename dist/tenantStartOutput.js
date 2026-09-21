@@ -1,6 +1,41 @@
 import { stripVTControlCharacters } from "node:util";
 import { hostedConsentUrl } from "./tenantStartFlow.js";
 export const TENANT_START_OUTPUT_VERSION = "millwork.tenant-start.v1";
+export const TENANT_START_VERIFIER_CONNECT_COMMAND = [
+    "millwork", "verifier", "connect", "--endpoint", "<https-url>", "--access", "public", "--connect-only",
+];
+/**
+ * Tenant-start receipts use Millwork's built-in presence baseline (or Echo for
+ * the starter template). Neither is a customer check. Keep that fact beside the
+ * completed receipt and provide an explicit, non-executing onward command.
+ */
+export function tenantStartVerificationOnward(application) {
+    const echo = application.template_id === "starter"
+        && ["echo_proved", "ready"].includes(application.state)
+        && application.receipt;
+    const baseline = application.template_id !== "starter"
+        && application.state === "ready"
+        && application.result
+        && application.receipt;
+    if (!echo && !baseline)
+        return undefined;
+    return {
+        status: "no_check_connected",
+        activity: echo ? "platform_echo" : "platform_baseline",
+        detail: echo
+            ? "No check connected. This test run checked the API connection without calling a model."
+            : "No check connected. Millwork checked that an answer was present, but did not check whether it was correct.",
+        next_action: {
+            type: "connect_verifier",
+            command: [...TENANT_START_VERIFIER_CONNECT_COMMAND],
+            guide_url: "https://docs.getmillwork.dev/guides/connect-an-output-check",
+            detail: "Prepare your output check: https://docs.getmillwork.dev/guides/connect-an-output-check.\nFor an HTTPS endpoint that needs no authentication, use the command below with its URL.\nThis registers the check and tests the connection without starting a model run.",
+        },
+    };
+}
+function onboardingCommandText(command) {
+    return command.map((argument) => /^<[^>]+>$/.test(argument) ? `"${argument}"` : argument).join(" ");
+}
 const NATIVE_KEY_ACTIONS = {
     openai_direct: {
         credential: "one active OpenAI project API key from the project you intend to use",
@@ -182,6 +217,7 @@ export function applicationSummary(application, extras) {
     const echoReady = echoOnly && ["echo_proved", "ready"].includes(application.state) && application.receipt;
     const pending = ["applying", "live_queued", "live_running"].includes(application.state);
     const recovery = extras.setup_recovery;
+    const verification = extras.verification ?? tenantStartVerificationOnward(application);
     const lines = [recovery ? "This setup was already complete. Showing the saved result; no new model run was started." : echoReady ? "Echo starter complete — no live model run."
             : ready ? "First live result ready."
                 : `Setup ${pending ? "in progress" : "paused"} — ${terminalText(application.state)}.`,
@@ -203,7 +239,7 @@ export function applicationSummary(application, extras) {
         lines.push("", "Result:", ...text.slice(0, 2000).split("\n").map((line) => `  ${line}`));
         if (text.length > 2000)
             lines.push("  [Preview truncated; --json returns the full result.]");
-        lines.push("", `Receipt: ${terminalText(application.receipt.receipt_id)}`, `Receipt API path: ${terminalText(application.receipt.href)}`, ...receiptCostLines(extras.execution_receipt), echoOnly ? "Verification: Echo only." : "Verification: output presence only; not semantic correctness.");
+        lines.push("", `Receipt: ${terminalText(application.receipt.receipt_id)}`, `Receipt API path: ${terminalText(application.receipt.href)}`, ...receiptCostLines(extras.execution_receipt), `Verification: ${verification?.detail ?? (echoOnly ? "Echo only." : "output presence only; not semantic correctness.")}`);
         const credit = extras.credit;
         lines.push(credit?.status === "available"
             ? `Account credit: USD ${credit.balance_usd} (current wallet; not a provider-cost settlement quote)`
@@ -237,5 +273,8 @@ export function applicationSummary(application, extras) {
     lines.push(`Inspect setup (read-only): npx --yes @millwork/solver tenant show --application-id '${id}' --json`, `Continue setup: npx --yes @millwork/solver tenant start --application-id '${id}'`, "For the complete machine-readable projection, add --json.");
     if (extras.files)
         lines.push(`Files: ${extras.files.written.length} written; ${extras.files.skipped_existing.length} existing files preserved.`);
+    if (verification) {
+        lines.push("", ...(!ready ? [`Verification: ${verification.detail}`] : []), verification.next_action.detail, `Next: ${onboardingCommandText(verification.next_action.command)}`);
+    }
     return `${lines.join("\n")}\n`;
 }

@@ -1,22 +1,28 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
+import { Writable } from "node:stream";
 import { stdin as input, stdout as output } from "node:process";
 import { Solver } from "./client.js";
 import { DEFAULT_API_BASE_URL, resolveDiscoveryCommand, safeBaseUrl } from "./cliDiscovery.js";
 import { cliApiError, safeErrorText } from "./cliGuidance.js";
 import { SolverApiError, SolverApiNetworkError } from "./errors.js";
+import { createRunReplayKey, hostOneRunApprovalRequest, readHostOneRunApproval, previewRunRequest, RunAdmissionError, RunAdmissionStore, } from "./runAdmission.js";
+import { resolveRunAuthorizationBoundary, unsupportedRunBoundaryReport, } from "./runAuthorizationBoundary.js";
 import { claimSetupRecovery, loadSetupRecovery, setupRequestHash, setupRecoveryCommand, SetupRecoveryStorageError } from "./cliSetupRecovery.js";
 import { bootstrapOrganizationKey, bootstrapOrganizationKeyInTerminal, loadStoredOrganizationKey } from "./cliOrganizationKeyBootstrap.js";
 import { inspectCommand, inspectionApiError, inspectionQualification, InspectionUsageError, resolveInspectionCommand } from "./cliInspection.js";
 import { qualificationFromApiError, qualificationFromPlan, qualifyMissingCredential, } from "./cliQualification.js";
 import { POOL_STARTER_CONFIG_PATH, STARTER_CONFIG_PATH, STARTER_ECHO_EXAMPLE_PATH, STARTER_POOL_EXAMPLE_PATH, writeApprovedScaffold, } from "./starterScaffold.js";
 import { principalScopedIdempotencyKey, progressTenantStart, tenantStartKey } from "./tenantStartFlow.js";
-import { createConsentPresenter } from "./tenantConsentBrowser.js";
+import { createConsentPresenter, openConsentBrowser } from "./tenantConsentBrowser.js";
 import { hostedConsentUrl } from "./tenantStartFlow.js";
 import { planByokChoice, byokChoice, resolveApprovedByokChoice, assertRecoveredByokChoice } from "./cliByokSelection.js";
 import { resolveProviderLifecycleCommand, runProviderLifecycle, providerLifecycleSummary, ProviderInspectionError } from "./cliProviderLifecycle.js";
-import { applicationSummary, receiptCostLines, readySetupRecovery, newSetupPlanOutput, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
+import { runVerifierKit } from "./cliVerifierKit.js";
+import { runPreviewLines, runResultLines } from "./runResultOutput.js";
+import { applicationSummary, receiptCostLines, readySetupRecovery, newSetupPlanOutput, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, tenantStartVerificationOnward, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
+import { acquireVerifierKeyEntry, submitVerifierIntake, trustedVerifierIntakeUrl, VERIFIER_LIFECYCLE_COMMANDS, VerifierIntakeError, VerifierLifecycleUsageError, runVerifierLifecycle, } from "./verifierLifecycleCli.js";
 const cliArgs = process.argv.slice(2);
 const interactive = tenantStartIsInteractive(cliArgs, Boolean(input.isTTY), Boolean(output.isTTY));
 let writtenFiles;
@@ -66,7 +72,9 @@ function authenticatedCommand(args) {
         || (args[0] === "models" && ["list", "use", "add"].includes(args[1] ?? ""))
         || (args[0] === "arms" && args[1] === "disable")
         || args[0] === "run"
-        || (args[0] === "verifier" && args[1] === "attach");
+        || (args[0] === "verifier" && ["attach", "connect", "list", "show", "test"].includes(args[1] ?? "")
+            && !hasFlag(args, "--local"))
+        || (args[0] === "verifier" && VERIFIER_LIFECYCLE_COMMANDS.has(args[1] ?? ""));
 }
 async function prepareOrganizationKey(args, tenantStart) {
     if (!authenticatedCommand(args) || process.env.SOLVERAPI_API_KEY?.trim())
@@ -232,6 +240,15 @@ async function confirm(question) {
         rl.close();
     }
 }
+async function promptLine(question) {
+    const rl = createInterface({ input, output: process.stderr });
+    try {
+        return (await rl.question(terminalText(question))).trim();
+    }
+    finally {
+        rl.close();
+    }
+}
 async function chooseByokOffering(offerings) {
     process.stderr.write("Choose your provider and model. Your provider bills model usage; Millwork charges its displayed live-run fee.\n");
     offerings.forEach((item, index) => process.stderr.write(`${index + 1}. ${terminalText(item.source_id)} — ${terminalText(item.model_key)} (${terminalText(item.served_variant_id)})${item.source_id === "aws_bedrock" ? item.auth_scheme === "api_key" ? " — Bedrock API key" : " — advanced AWS STS" : ""}\n`));
@@ -276,8 +293,10 @@ async function finishApplication(solver, initial, recovered = false) {
             return confirm("Authorize this exact bounded live proof? [y/N] ");
         },
     });
+    const verification = tenantStartVerificationOnward(application);
     const extras = { ...(setupRecovery ? { setup_recovery: setupRecovery } : {}), ...(writtenFiles ? { files: writtenFiles } : {}),
-        ...(freshApplicationKey ? { retried_with_fresh_key: true, application_key: freshApplicationKey } : {}) };
+        ...(freshApplicationKey ? { retried_with_fresh_key: true, application_key: freshApplicationKey } : {}),
+        ...(verification ? { verification } : {}) };
     let selection;
     if (application.state === "ready" && application.managed_arm_id
         && application.selected_model_deployment_id) {
@@ -454,8 +473,102 @@ async function runArmDisable(solver, args) {
     else
         emitJson({ operation: "arms_disable", ...outcome, was_current: current?.managed_arm_id === armId });
 }
+const uncheckedProbeSection = { status: "not_checked", correction: null };
+function contractCheckFailed(report) {
+    if (report.feedback?.response_compatibility?.status !== "ok")
+        return true;
+    return report.contract?.validated !== true;
+}
+function probeFacts(report, declaration) {
+    return {
+        reachable: report.feedback?.reachability ?? uncheckedProbeSection,
+        authentication: report.feedback?.authentication ?? uncheckedProbeSection,
+        response_contract: report.feedback?.response_compatibility ?? uncheckedProbeSection,
+        declaration: {
+            status: declaration?.status ?? "not_declared",
+            statement: declaration?.statement ?? "Not declared",
+        },
+    };
+}
+function connectionHeadline(status, report) {
+    if (contractCheckFailed(report))
+        return "not_ready";
+    return status;
+}
+function connectionHeadlineCopy(headline, facts) {
+    if (headline === "ready")
+        return "Connection tested. Review a run with this check.";
+    if (facts.reachable.status === "failed")
+        return "We could not reach your check.";
+    if (facts.authentication.status === "failed")
+        return "Your check did not accept this key.";
+    return "Access connected. The check's response needs a fix.";
+}
+function writeProbeFacts(facts, headline) {
+    const line = (label, section) => section.correction
+        ? `${label}: ${section.status} — ${section.correction}`
+        : `${label}: ${section.status}`;
+    process.stdout.write(`Reachable: ${facts.reachable.status}${facts.reachable.correction ? ` — ${facts.reachable.correction}` : ""}\n`
+        + `${line("Authentication", facts.authentication)}\n`
+        + `${line("Response contract", facts.response_contract)}\n`
+        + `Declaration: ${facts.declaration.status} — ${facts.declaration.statement}\n`
+        + `Compatibility: ${headline === "ready" ? "usable" : "not usable"}.\n`);
+}
+function parseAccessMode(args) {
+    const access = flagValue(args, "--access");
+    if (access === undefined)
+        return undefined;
+    if (access === "public" || access === "managed")
+        return access;
+    throw new InspectionUsageError("--access must be public or managed");
+}
+async function resolveAccessMode(args) {
+    const explicit = parseAccessMode(args);
+    if (explicit)
+        return explicit;
+    if (flagValue(args, "--intent-id") || flagValue(args, "--stop-days") !== undefined
+        || flagValue(args, "--stop-date") !== undefined)
+        return "managed";
+    if (flagValue(args, "--verifier-id") && !flagValue(args, "--endpoint"))
+        return "managed";
+    if (!interactive) {
+        emitJson({
+            operation: "verifier_connect",
+            state: "action_required",
+            next_action: "pass --access public for a credential-less endpoint, or --access managed for a protected adapter key",
+        });
+        process.exitCode = 2;
+        return undefined;
+    }
+    const managed = await confirm("Does this check require an adapter credential Millwork will hold? [y/N] ");
+    return managed ? "managed" : "public";
+}
+function parseVerifierDataClass(args) {
+    const dataClass = (flagValue(args, "--data-class") ?? "public");
+    if (!new Set(["public", "sandbox", "tenant_internal"]).has(dataClass)) {
+        throw new InspectionUsageError("--data-class must be public, sandbox, or tenant_internal");
+    }
+    return dataClass;
+}
+async function registerEndpointVerifier(solver, args, endpoint, authRef, operationKeyPrefix = "verifier-register", operationKeyMaterial = `${authRef}\0${endpoint}`) {
+    const dataClass = parseVerifierDataClass(args);
+    return solver.verifiers.create({
+        display_name: flagValue(args, "--name") ?? "Millwork verifier",
+        version: flagValue(args, "--version") ?? "1",
+        kind: "endpoint",
+        endpoint: { url: endpoint, auth_ref: authRef },
+        input_data_classes: [dataClass],
+        scoring: { correctness: "boolean_anchors", quality: "scalar_0_1" },
+        ...(hasFlag(args, "--declare-deterministic")
+            ? { correctness_declaration: { method: "deterministic" } }
+            : {}),
+    }, {
+        idempotencyKey: flagValue(args, "--idempotency-key")
+            ?? await defaultRequestKey(solver, `${operationKeyPrefix}:${createHash("sha256").update(operationKeyMaterial).digest("hex")}`),
+    });
+}
 async function runVerifierAttach(solver, args) {
-    assertCommandFlags(args, 2, new Set(["--json", "--yes"]), new Set(["--name", "--version", "--endpoint", "--auth-ref", "--data-class", "--idempotency-key"]));
+    assertCommandFlags(args, 2, new Set(["--json", "--yes", "--declare-deterministic"]), new Set(["--name", "--version", "--endpoint", "--auth-ref", "--data-class", "--idempotency-key"]));
     const endpoint = flagValue(args, "--endpoint");
     const authRef = flagValue(args, "--auth-ref");
     if (!endpoint || !authRef)
@@ -466,38 +579,745 @@ async function runVerifierAttach(solver, args) {
             process.exitCode = 2;
         return;
     }
-    const dataClass = (flagValue(args, "--data-class") ?? "public");
-    if (!new Set(["public", "sandbox", "tenant_internal"]).has(dataClass)) {
-        throw new InspectionUsageError("--data-class must be public, sandbox, or tenant_internal");
+    const outcome = await registerEndpointVerifier(solver, args, endpoint, authRef, "verifier-attach", endpoint);
+    const facts = probeFacts(outcome.preflight, outcome.correctness_declaration);
+    const headline = connectionHeadline(outcome.status, outcome.preflight);
+    if (interactive) {
+        process.stdout.write(`Verifier ${terminalText(outcome.verifier_id)} — ${terminalText(headline)}.\n`);
+        writeProbeFacts(facts, headline);
     }
-    const outcome = await solver.verifiers.create({
-        display_name: flagValue(args, "--name") ?? "Millwork verifier",
-        version: flagValue(args, "--version") ?? "1",
-        kind: "endpoint",
-        endpoint: { url: endpoint, auth_ref: authRef },
-        input_data_classes: [dataClass],
-        scoring: { correctness: "boolean_anchors", quality: "scalar_0_1" },
-    }, { idempotencyKey: flagValue(args, "--idempotency-key")
-            ?? await defaultRequestKey(solver, `verifier-attach:${createHash("sha256").update(endpoint).digest("hex")}`) });
-    if (interactive)
-        process.stdout.write(`Verifier ${terminalText(outcome.verifier_id)} — ${terminalText(outcome.status)}.\n`);
+    else {
+        emitJson({ operation: "verifier_attach", verifier_id: outcome.verifier_id, hash: outcome.hash,
+            status: outcome.status, headline, facts, preflight: outcome.preflight,
+            correctness_declaration: outcome.correctness_declaration });
+    }
+    if (headline !== "ready")
+        process.exitCode = 1;
+}
+async function runPublicVerifierConnect(solver, args) {
+    const endpoint = flagValue(args, "--endpoint");
+    let verifierId = flagValue(args, "--verifier-id");
+    if (!verifierId && !endpoint) {
+        throw new InspectionUsageError("credential-less verifier connect requires --endpoint <https-url> or --verifier-id");
+    }
+    let outcome;
+    if (!verifierId && endpoint) {
+        if (!hasFlag(args, "--name") || !hasFlag(args, "--version")) {
+            if (!interactive) {
+                emitJson({
+                    operation: "verifier_connect",
+                    state: "action_required",
+                    next_action: "pass --name and --version; registration metadata is not guessed",
+                });
+                process.exitCode = 2;
+                return;
+            }
+            const name = flagValue(args, "--name") ?? "Millwork verifier";
+            const version = flagValue(args, "--version") ?? "1";
+            if (!await confirm(`Register this check as ${name} version ${version} with no adapter credential? [y/N] `)) {
+                process.stdout.write("cancelled\n");
+                return;
+            }
+        }
+        outcome = await registerEndpointVerifier(solver, args, endpoint, "");
+        verifierId = outcome.verifier_id;
+    }
+    else {
+        outcome = await solver.verifiers.test(verifierId, {
+            idempotencyKey: flagValue(args, "--idempotency-key")
+                ?? await defaultRequestKey(solver, `verifier-test:${verifierId}`),
+        });
+    }
+    const report = "preflight" in outcome ? outcome.preflight : outcome.probe;
+    const facts = probeFacts(report, outcome.correctness_declaration);
+    const headline = connectionHeadline(outcome.status, report);
+    const connection = {
+        access: "public",
+        verifier_id: verifierId,
+        status: outcome.status,
+        headline,
+        facts,
+        probe: report,
+        correctness_declaration: outcome.correctness_declaration,
+    };
+    if (interactive) {
+        process.stdout.write(`${connectionHeadlineCopy(headline, facts)}\nVerifier ${terminalText(verifierId)}.\n`);
+        writeProbeFacts(facts, headline);
+    }
+    if (headline !== "ready") {
+        if (!interactive)
+            emitJson({ operation: "verifier_connect", ...connection });
+        process.exitCode = 1;
+        return;
+    }
+    if (hasFlag(args, "--connect-only")) {
+        if (interactive)
+            process.stdout.write("Check connected. No run started.\n");
+        else
+            emitJson({ operation: "verifier_connect", ...connection });
+        return;
+    }
+    await continueConnectedVerifierRun(solver, args, verifierId, connection);
+}
+async function continueConnectedVerifierRun(solver, args, verifierId, connection) {
+    let objective = flagValue(args, "--objective");
+    if (!objective) {
+        if (interactive) {
+            objective = await promptLine("What should the first run do? (Enter to stop after connecting): ");
+            if (!objective) {
+                process.stdout.write("Check connected. No run started.\n");
+                return;
+            }
+        }
+        else {
+            emitJson({
+                operation: "verifier_connect",
+                ...connection,
+                state: "action_required",
+                next_action: "re-run with --objective to preview the first governed run, or --connect-only to stop after connect",
+            });
+            process.exitCode = 2;
+            return;
+        }
+    }
+    const suppliedPreset = flagValue(args, "--preset");
+    const usesExplicitRunBounds = flagValue(args, "--arm-id") && flagValue(args, "--max-cost-usd") && flagValue(args, "--max-runtime-s");
+    const currentPreset = !suppliedPreset && !usesExplicitRunBounds
+        ? (await solver.tenantTemplates.current())?.request_preset_id
+        : undefined;
+    await runExecution(solver, [
+        "run",
+        "--verifier-id", verifierId,
+        "--objective", objective,
+        ...(suppliedPreset ?? currentPreset ? ["--preset", (suppliedPreset ?? currentPreset)] : []),
+        ...(flagValue(args, "--arm-id") ? ["--arm-id", flagValue(args, "--arm-id")] : []),
+        ...(flagValue(args, "--max-cost-usd") ? ["--max-cost-usd", flagValue(args, "--max-cost-usd")] : []),
+        ...(flagValue(args, "--max-runtime-s") ? ["--max-runtime-s", flagValue(args, "--max-runtime-s")] : []),
+        ...(flagValue(args, "--data-class") ? ["--data-class", flagValue(args, "--data-class")] : []),
+        ...(hasFlag(args, "--json") ? ["--json"] : []),
+    ], { connection });
+}
+function connectionStatusLabel(status) {
+    switch (status) {
+        case "active": return "Connected";
+        case "revoked": return "Disconnected";
+        case "expired": return "Stop date passed";
+        case "unknown": return "Could not confirm the connection";
+        case "unbound": return "Not connected";
+    }
+}
+function connectionStopLine(connection) {
+    if (!connection.stop_at)
+        return null;
+    const remaining = connection.days_remaining === null
+        ? ""
+        : ` · ${connection.days_remaining} ${connection.days_remaining === 1 ? "day" : "days"} remaining`;
+    return `Millwork will stop using this key at ${terminalText(connection.stop_at)} (${terminalText(connection.stop_time_zone ?? "UTC")})${remaining}.`;
+}
+async function runVerifierList(solver, args) {
+    assertCommandFlags(args, 2, new Set(["--json"]), new Set(["--cursor", "--limit"]));
+    const limit = flagValue(args, "--limit");
+    const page = await solver.verifiers.list({
+        cursor: flagValue(args, "--cursor"),
+        ...(limit ? { limit: Number(limit) } : {}),
+    });
+    if (interactive) {
+        if (page.items.length === 0)
+            process.stdout.write("No checks registered. Connect one with millwork verifier connect --endpoint <https-url> --access public.\n");
+        for (const row of page.items) {
+            const connection = row.connection;
+            const stop = connection ? connectionStopLine(connection) : null;
+            const status = connection ? connectionStatusLabel(connection.status) : "Could not confirm the connection";
+            process.stdout.write(`${terminalText(row.verifier_id)}  ${terminalText(row.display_name)}  ${terminalText(row.version)}  ${status}${stop ? `  ${stop}` : ""}\n`);
+        }
+        if (page.nextCursor)
+            process.stdout.write(`Next page: millwork verifier list --cursor ${page.nextCursor}\n`);
+        return;
+    }
+    emitJson({ operation: "verifier_list", verifiers: page.items, next_cursor: page.nextCursor });
+}
+async function runVerifierShow(solver, args) {
+    assertCommandFlags(args, 2, new Set(["--json"]), new Set(["--verifier-id"]));
+    const verifierId = flagValue(args, "--verifier-id") ?? args[2];
+    if (!verifierId || verifierId.startsWith("--")) {
+        throw new InspectionUsageError("verifier show requires --verifier-id <id>");
+    }
+    const row = await solver.verifiers.get(verifierId);
+    if (interactive) {
+        const connection = row.connection;
+        const stopped = connection?.stopped_at ? ` at ${terminalText(connection.stopped_at)}` : "";
+        const reason = connection?.stop_reason === "origin_invalidated"
+            ? "Endpoint address changed. Restore with a new key for the current endpoint."
+            : connection?.stop_reason === "stop_date"
+                ? "The selected Millwork stop date passed. Restore with a new key to reconnect."
+                : connection?.stop_reason === "revoked"
+                    ? "Disconnected in Millwork. The key may still work at the endpoint."
+                    : null;
+        const schedule = connection ? connectionStopLine(connection) : null;
+        const connectionStatus = connection ? connectionStatusLabel(connection.status) : "Could not confirm the connection";
+        process.stdout.write(`${terminalText(row.verifier_id)}\n${terminalText(row.display_name)} ${terminalText(row.version)}\n`
+            + `Endpoint: ${terminalText(row.endpoint.url)}\n`
+            + `Connection: ${connectionStatus}${stopped}\n`
+            + (schedule ? `${schedule}\n` : "")
+            + (reason ? `Next step: ${reason}\n` : "")
+            + `Declaration: ${row.correctness_declaration?.status ?? "not_declared"}\n`);
+        return;
+    }
+    emitJson({ operation: "verifier_show", ...row });
+}
+async function runVerifierRetest(solver, args) {
+    assertCommandFlags(args, 2, new Set(["--json"]), new Set(["--verifier-id", "--idempotency-key"]));
+    const verifierId = flagValue(args, "--verifier-id") ?? args[2];
+    if (!verifierId || verifierId.startsWith("--")) {
+        throw new InspectionUsageError("verifier test requires --verifier-id <id>");
+    }
+    const report = await solver.verifiers.test(verifierId, {
+        idempotencyKey: flagValue(args, "--idempotency-key")
+            ?? await defaultRequestKey(solver, `verifier-test:${verifierId}`),
+    });
+    const facts = probeFacts(report.probe, report.correctness_declaration);
+    const headline = connectionHeadline(report.status, report.probe);
+    if (interactive) {
+        process.stdout.write(`Verifier ${terminalText(report.verifier_id)} — ${terminalText(headline)}.\n`);
+        writeProbeFacts(facts, headline);
+    }
+    else {
+        emitJson({ operation: "verifier_test", verifier_id: report.verifier_id, status: report.status,
+            headline, facts, probe: report.probe, correctness_declaration: report.correctness_declaration });
+    }
+    if (headline !== "ready")
+        process.exitCode = 1;
+}
+function validCalendarDate(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value))
+        return false;
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+function validTimeZone(value) {
+    try {
+        new Intl.DateTimeFormat("en", { timeZone: value }).format();
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+async function verifierStopChoice(args) {
+    let days = flagValue(args, "--stop-days");
+    let date = flagValue(args, "--stop-date");
+    let timeZone = flagValue(args, "--time-zone");
+    if (days !== undefined && (date !== undefined || timeZone !== undefined)) {
+        throw new InspectionUsageError("Use --stop-days or --stop-date with --time-zone, not both");
+    }
+    if (days === undefined && date === undefined) {
+        if (!interactive) {
+            throw new InspectionUsageError("Choose --stop-days <30|90|180|365|0> or --stop-date <YYYY-MM-DD> --time-zone <IANA-zone>");
+        }
+        process.stderr.write("When should Millwork stop using this key? Enter 30, 90, 180, 365, 0 for no stop date, or YYYY-MM-DD: ");
+        const answer = (await readLineUnmuted()).trim();
+        if (validCalendarDate(answer))
+            date = answer;
+        else
+            days = answer;
+    }
+    if (date !== undefined) {
+        if (!validCalendarDate(date))
+            throw new InspectionUsageError("--stop-date must be a real calendar date in YYYY-MM-DD form");
+        if (timeZone === undefined && interactive) {
+            const local = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+            process.stderr.write(`Time zone for ${date} [${local}]: `);
+            timeZone = (await readLineUnmuted()).trim() || local;
+        }
+        if (!timeZone || !validTimeZone(timeZone)) {
+            throw new InspectionUsageError("--time-zone must be an IANA time zone when --stop-date is used");
+        }
+        return { kind: "calendar_date", date, time_zone: timeZone };
+    }
+    const count = Number(days);
+    if (count === 0)
+        return { kind: "no_expiration" };
+    if (count === 30 || count === 90 || count === 180 || count === 365)
+        return { kind: "preset_days", days: count };
+    throw new InspectionUsageError("--stop-days must be 30, 90, 180, 365, or 0 for no Millwork stop date");
+}
+function verifierStopChoiceLabel(choice) {
+    if (choice.kind === "no_expiration")
+        return "none";
+    if (choice.kind === "preset_days")
+        return `${choice.days} days after the key is saved`;
+    return `${choice.date} (${choice.time_zone})`;
+}
+async function runVerifierConnect(solver, args) {
+    assertCommandFlags(args, 2, new Set(["--json", "--yes", "--connect-only", "--declare-deterministic", "--open-browser", "--no-browser"]), new Set([
+        "--verifier-id", "--endpoint", "--name", "--version", "--data-class", "--stop-days", "--stop-date", "--time-zone", "--idempotency-key", "--intent-id",
+        "--access", "--objective", "--preset", "--arm-id", "--max-cost-usd", "--max-runtime-s",
+    ]));
+    const access = await resolveAccessMode(args);
+    if (!access)
+        return;
+    if (access === "public")
+        return runPublicVerifierConnect(solver, args);
+    let verifierId = flagValue(args, "--verifier-id");
+    const endpoint = flagValue(args, "--endpoint");
+    const resumeIntentId = flagValue(args, "--intent-id");
+    if (!verifierId && !endpoint && !resumeIntentId)
+        throw new InspectionUsageError("verifier connect requires --verifier-id, --endpoint, or --intent-id");
+    if (!verifierId && endpoint) {
+        const dataClass = (flagValue(args, "--data-class") ?? "public");
+        const created = await solver.verifiers.create({
+            display_name: flagValue(args, "--name") ?? "Millwork verifier",
+            version: flagValue(args, "--version") ?? "1",
+            kind: "endpoint",
+            endpoint: { url: endpoint, auth_ref: "" },
+            input_data_classes: [dataClass],
+            scoring: { correctness: "boolean_anchors", quality: "scalar_0_1" },
+        }, { idempotencyKey: flagValue(args, "--idempotency-key")
+                ?? await defaultRequestKey(solver, `verifier-connect:${createHash("sha256").update(endpoint).digest("hex")}`) });
+        verifierId = created.verifier_id;
+    }
+    if (!verifierId)
+        throw new InspectionUsageError("verifier connect resume requires --verifier-id with --intent-id");
+    if (hasFlag(args, "--open-browser") && hasFlag(args, "--no-browser")) {
+        throw new InspectionUsageError("--open-browser and --no-browser cannot be used together");
+    }
+    const stopChoice = resumeIntentId ? undefined : await verifierStopChoice(args);
+    const intent = resumeIntentId
+        ? {
+            continue_url: "",
+            intent_id: resumeIntentId,
+            origin: "",
+            expires_at: "",
+        }
+        : await solver.verifierConnection.createIntent(verifierId, stopChoice, {
+            idempotencyKey: flagValue(args, "--idempotency-key"),
+        });
+    const resumed = resumeIntentId
+        ? await recoverStagedVerifierIntake(solver, verifierId, intent.intent_id)
+        : undefined;
+    let staged = resumed?.kind === "recovered" ? resumed.staged : undefined;
+    if (resumeIntentId && resumed?.kind !== "recovered") {
+        if (resumed?.kind === "not_entered") {
+            emitVerifierConnectProblem(verifierId, {
+                state: "action_required",
+                nextAction: "enter_key",
+                reason: "No key has been entered for this setup yet. Enter it on the private page first, then run this command again.",
+            });
+        }
+        else {
+            emitVerifierConnectProblem(verifierId, {
+                state: "unknown",
+                nextAction: "wait_then_recover_same_intent",
+                reason: "We could not confirm whether the key was saved. Do not enter it again. Wait, then continue this setup:",
+                next: verifierIntentRecoveryCommand(verifierId, intent.intent_id),
+            });
+        }
+        process.exitCode = 2;
+        return;
+    }
+    if (!staged) {
+        let continueUrl;
+        try {
+            continueUrl = trustedVerifierIntakeUrl(intent.continue_url, process.env.CUSTOMER_APP_ORIGIN
+                ?? ("intake_origin" in intent ? intent.intake_origin : undefined)
+                ?? new URL(process.env.SOLVERAPI_BASE_URL ?? DEFAULT_API_BASE_URL).origin);
+        }
+        catch {
+            emitVerifierConnectProblem(verifierId, {
+                state: "refused", nextAction: "inspect_server_configuration",
+                reason: "The server returned an invalid key-entry URL. Inspect the server configuration before starting a new intent.",
+            });
+            process.exitCode = 2;
+            return;
+        }
+        if (intent.origin && interactive)
+            process.stdout.write(`Destination origin: ${intent.origin}\n`);
+        if (interactive && stopChoice)
+            process.stdout.write(`Millwork stop date: ${verifierStopChoiceLabel(stopChoice)}\n`);
+        const acquired = await acquireVerifierKeyEntry({
+            args,
+            interactive,
+            continueUrl: continueUrl.href,
+            expiresAt: intent.expires_at,
+            existingSecret: process.env.VERIFIER_CONNECTION_SECRET,
+            readSecret: readMutedVerifierSecret,
+            recover: () => recoverStagedVerifierIntake(solver, verifierId, intent.intent_id).then((result) => result.kind === "not_entered" ? { kind: "pending" } : result),
+            openBrowser: openConsentBrowser,
+            out: (text) => process.stdout.write(text),
+            err: (text) => process.stderr.write(text),
+        });
+        if (acquired.kind === "staged")
+            staged = acquired.staged;
+        if (!staged && acquired.kind === "resume") {
+            emitVerifierConnectResume(verifierId, intent);
+            process.exitCode = 2;
+            return;
+        }
+        const secret = acquired.kind === "secret" ? acquired.secret : undefined;
+        if (!staged)
+            try {
+                staged = await submitVerifierIntake({
+                    url: continueUrl,
+                    secret: secret,
+                    apiKey: process.env.SOLVERAPI_API_KEY,
+                });
+            }
+            catch (error) {
+                if (!(error instanceof VerifierIntakeError))
+                    throw error;
+                const recovered = error.mayHaveCommitted
+                    ? await recoverStagedVerifierIntake(solver, verifierId, intent.intent_id)
+                    : undefined;
+                staged = recovered?.kind === "recovered" ? recovered.staged : undefined;
+                if (!staged) {
+                    if (error.failure === "rate_limited") {
+                        const wait = error.retryAfterSeconds;
+                        const next = stopChoice === undefined ? undefined : newVerifierIntentCommand(verifierId, stopChoice);
+                        emitVerifierConnectProblem(verifierId, {
+                            state: "retry_required",
+                            nextAction: next ? "start_new_intent" : "choose_stop_period_then_start_new_intent",
+                            reason: wait === null
+                                ? `Too many key-entry requests. Try again later${next ? " with:" : " and choose a stop period (30, 90, 180, 365, or 0)."}`
+                                : `Too many key-entry requests. Wait at least ${wait} seconds, then try again${next ? " with:" : " and choose a stop period (30, 90, 180, 365, or 0)."}`,
+                            next,
+                            retryAfterSeconds: wait,
+                        });
+                    }
+                    else if (error.failure === "admission_refused") {
+                        emitVerifierConnectProblem(verifierId, {
+                            state: "refused",
+                            nextAction: "request_tenant_admission",
+                            reason: "Your organization does not currently have access to the private preview. Contact Millwork support to restore or request access, then try again.",
+                        });
+                    }
+                    else if (error.failure === "authentication_refused") {
+                        const next = stopChoice === undefined ? undefined : newVerifierIntentCommand(verifierId, stopChoice);
+                        emitVerifierConnectProblem(verifierId, {
+                            state: "refused",
+                            nextAction: next ? "start_new_intent" : "choose_stop_period_then_start_new_intent",
+                            reason: next
+                                ? "The key-entry request was refused. Use the API key that created the intent, then start a new intent with:"
+                                : "The key-entry request was refused. Use the API key that created the intent, then choose a stop period (30, 90, 180, 365, or 0) and start a new intent.",
+                            next,
+                        });
+                    }
+                    else if (error.failure === "request_refused") {
+                        const next = stopChoice === undefined ? undefined : newVerifierIntentCommand(verifierId, stopChoice);
+                        emitVerifierConnectProblem(verifierId, {
+                            state: "refused",
+                            nextAction: next ? "start_new_intent" : "choose_stop_period_then_start_new_intent",
+                            reason: next
+                                ? "The key-entry request was refused before the key could be saved. Check the entered value, then start a new intent with:"
+                                : "The key-entry request was refused before the key could be saved. Check the entered value, then choose a stop period (30, 90, 180, 365, or 0) and start a new intent.",
+                            next,
+                        });
+                    }
+                    else {
+                        emitVerifierConnectProblem(verifierId, {
+                            state: "unknown",
+                            nextAction: "recover_same_intent",
+                            reason: "We could not confirm whether the key was saved. Do not enter it again. Wait, then continue this setup:",
+                            next: verifierIntentRecoveryCommand(verifierId, intent.intent_id),
+                        });
+                    }
+                    process.exitCode = 2;
+                    return;
+                }
+            }
+    }
+    await solver.verifierConnection.testAndPromote(verifierId, {
+        handle: staged.handle,
+        captured_generation: staged.captured_generation,
+    });
+    const connection = await solver.verifierConnection.inspect(verifierId);
+    if (interactive) {
+        const stop = connectionStopLine(connection) ?? "No Millwork stop date.";
+        process.stdout.write(`Verifier ${terminalText(verifierId)} connected. ${stop}\n`);
+    }
     else
-        emitJson({ operation: "verifier_attach", ...outcome });
+        emitJson({ operation: "verifier_connect", verifier_id: verifierId, ...connection });
+    if (interactive && !hasFlag(args, "--connect-only")) {
+        await continueConnectedVerifierRun(solver, args, verifierId, {
+            access: "managed", verifier_id: verifierId, ...connection,
+        });
+    }
+}
+/**
+ * The command that finishes an entered key is `verifier continue`: it reads
+ * this exact operation back and tests the key entered for it. `verifier
+ * connect --intent-id` re-enters the connect flow instead, which is not what
+ * a caller holding a half-finished entry needs.
+ */
+function verifierConnectContinueCommand(verifierId, intentId) {
+    return `millwork verifier continue --verifier-id ${verifierId} --intent-id ${intentId}`;
+}
+async function recoverStagedVerifierIntake(solver, verifierId, intentId) {
+    let recovered;
+    try {
+        recovered = await solver.verifierConnection.inspect(verifierId, { operationKey: intentId });
+    }
+    catch {
+        return { kind: "unknown" };
+    }
+    const pending = recovered.pending_key;
+    const last = recovered.last_operation;
+    const projectionAck = recovered.projection_ack;
+    if (recovered.status === "unknown"
+        || projectionAck === "unknown"
+        || !Object.prototype.hasOwnProperty.call(recovered, "last_operation"))
+        return { kind: "unknown" };
+    if (!last)
+        return { kind: "not_entered" };
+    if (!pending
+        || last.status !== undefined
+        || last.kind !== "stage"
+        || last.phase !== "admitted"
+        || last.resulting_state?.handle !== pending.handle)
+        return { kind: "unknown" };
+    return {
+        kind: "recovered",
+        staged: { handle: pending.handle, captured_generation: pending.captured_generation },
+    };
+}
+function verifierIntentRecoveryCommand(verifierId, intentId) {
+    return `millwork verifier connect --verifier-id ${verifierId} --intent-id ${intentId}`;
+}
+function newVerifierIntentCommand(verifierId, stopChoice) {
+    if (stopChoice.kind === "calendar_date") {
+        return `millwork verifier connect --verifier-id ${verifierId} --stop-date ${stopChoice.date} --time-zone ${stopChoice.time_zone}`;
+    }
+    return `millwork verifier connect --verifier-id ${verifierId} --stop-days ${stopChoice.kind === "no_expiration" ? 0 : stopChoice.days}`;
+}
+function emitVerifierConnectProblem(verifierId, problem) {
+    if (interactive) {
+        process.stderr.write(`${problem.reason}\n`);
+        if (problem.next)
+            process.stdout.write(`${problem.next}\n`);
+        return;
+    }
+    emitJson({
+        operation: "verifier_connect",
+        state: problem.state,
+        verifier_id: verifierId,
+        reason: problem.reason,
+        next_action: problem.nextAction,
+        ...(problem.next ? { next: problem.next } : {}),
+        ...(problem.retryAfterSeconds === undefined ? {} : { retry_after_seconds: problem.retryAfterSeconds }),
+    });
+}
+function emitVerifierConnectResume(verifierId, intent, reason) {
+    if (interactive) {
+        if (reason)
+            process.stderr.write(`${reason}\n`);
+        process.stdout.write(`Open this page to enter the verifier key: ${intent.continue_url}\n`);
+        if (intent.origin)
+            process.stdout.write(`Destination origin: ${intent.origin}\n`);
+        process.stdout.write(`Finish with: ${verifierConnectContinueCommand(verifierId, intent.intent_id)}\n`);
+        return;
+    }
+    emitJson({
+        operation: "verifier_connect",
+        state: "action_required",
+        verifier_id: verifierId,
+        continue_url: intent.continue_url,
+        intent_id: intent.intent_id,
+        origin: intent.origin,
+        expires_at: intent.expires_at,
+        next_action: verifierConnectContinueCommand(verifierId, intent.intent_id),
+        ...(reason ? { reason } : {}),
+    });
+}
+async function readLineUnmuted() {
+    const reader = createInterface({ input, output, historySize: 0 });
+    try {
+        return await reader.question("");
+    }
+    finally {
+        reader.close();
+    }
+}
+async function readMutedVerifierSecret() {
+    if (!interactive || !input.isTTY || !output.isTTY || typeof input.setRawMode !== "function")
+        return undefined;
+    const wasRaw = input.isRaw;
+    const muted = new Writable({ write(_chunk, _encoding, done) { done(); } });
+    const reader = createInterface({ input, output: muted, terminal: true, historySize: 0 });
+    const cancellation = new AbortController();
+    const cancel = () => cancellation.abort();
+    reader.on("SIGINT", cancel);
+    reader.on("close", cancel);
+    process.on("SIGINT", cancel);
+    try {
+        const answer = reader.question("", { signal: cancellation.signal });
+        process.stderr.write("Verifier key (hidden; Enter to use the private page instead): ");
+        let secret;
+        try {
+            secret = await answer;
+        }
+        catch {
+            return undefined;
+        }
+        process.stderr.write("\n");
+        if (cancellation.signal.aborted)
+            return undefined;
+        return secret.trim() === "" ? undefined : secret;
+    }
+    finally {
+        reader.close();
+        process.removeListener("SIGINT", cancel);
+        input.setRawMode(wasRaw);
+        muted.destroy();
+    }
 }
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
-async function runExecution(solver, args) {
+const TERMINAL_EXECUTION_STATES = new Set(["completed", "failed", "cancelled", "expired"]);
+function shellQuote(value) {
+    return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+function replayCommand(args, replayKey) {
+    const replayArgs = [];
+    for (let index = 0; index < args.length; index += 1) {
+        const argument = args[index];
+        if (argument === "--yes")
+            continue;
+        if (argument === "--replay-key" || argument === "--idempotency-key") {
+            index += 1;
+            continue;
+        }
+        replayArgs.push(argument);
+    }
+    return ["millwork", ...replayArgs, "--replay-key", replayKey].map(shellQuote).join(" ");
+}
+async function waitForExecution(solver, execution, maxRuntimeS) {
+    const deadline = Date.now() + (maxRuntimeS + 30) * 1_000;
+    let current = execution;
+    while (!TERMINAL_EXECUTION_STATES.has(current.status) && Date.now() < deadline) {
+        if (interactive)
+            process.stderr.write(`Execution ${terminalText(current.execution_id)} — ${terminalText(current.status)}\n`);
+        await sleep(1_000);
+        current = await solver.executions.get(execution.execution_id);
+    }
+    if (!TERMINAL_EXECUTION_STATES.has(current.status)) {
+        throw new Error(`Execution ${execution.execution_id} did not reach a terminal state before the local wait bound.`);
+    }
+    return current;
+}
+async function inspectExecution(solver, executionId, json) {
+    const execution = await solver.executions.get(executionId);
+    const terminal = TERMINAL_EXECUTION_STATES.has(execution.status);
+    const result = execution.status === "completed" ? await solver.executions.result(executionId) : null;
+    const receipt = terminal ? await solver.receipts.get(executionId) : null;
+    if (!json && interactive) {
+        process.stdout.write(`${result ? `${terminalText(result.final_text, true)}\n` : ""}Execution ${terminalText(executionId)} — ${terminalText(execution.status)}\n${receipt ? `Receipt ${terminalText(executionId)}\n${[...receiptCostLines(receipt), ...runResultLines(receipt)].map(line => `${terminalText(line)}\n`).join("")}` : "Receipt pending\n"}`);
+    }
+    else {
+        emitJson({ operation: "run_inspect", execution, result, receipt });
+    }
+    if (terminal && execution.status !== "completed")
+        process.exitCode = 1;
+}
+const UNSUPPORTED_RUN_BOUNDARY_HEADLINE = "This environment cannot authorize a paid run: nothing here is separate enough from the caller to approve spending.";
+// The four parts are one arrangement, not a menu. With a read-only ledger this
+// process cannot record what a standing authorization has spent, so standing
+// authorization admits nothing and the host's per-run approval is the only
+// authority left. Describing the parts as alternatives sent hosts away to
+// configure a boundary that would still refuse every run.
+const UNSUPPORTED_RUN_BOUNDARY_NEXT_ACTION = "Ask the host administrator to configure the run-authorization boundary described in the SDK README: an attestation owned by a separate principal, a read-only host admission ledger, a caller-owned recovery journal, and a host-owned one-run approval channel. A prompt, `--yes`, or a tool argument cannot replace host approval.";
+function suppliedReplayKeyIntent(args) {
+    return flagValue(args, "--replay-key") ?? flagValue(args, "--idempotency-key") ? "recover_same_run" : "new_run";
+}
+function admissionNeedsHostApproval(error) {
+    return new Set([
+        "missing_authorization",
+        "authorization_expired",
+        "authorization_revoked",
+        "authorization_out_of_coverage",
+        "per_run_cap_exceeded",
+        "aggregate_exhausted",
+        "authorization_file_invalid",
+    ]).has(error.code);
+}
+const AUTHORITATIVE_NO_ACCEPT_PROBLEMS = new Set([
+    "validation_failed",
+    "echo_mode_mismatch",
+    "data_class_not_available",
+    "not_found",
+    "invalid_state",
+    "quota_exceeded",
+    "insufficient_credit",
+    "credit_wallet_frozen",
+]);
+function provesNoExecutionWasAccepted(error) {
+    return AUTHORITATIVE_NO_ACCEPT_PROBLEMS.has(error.type.split("/").at(-1) ?? "");
+}
+function emitRunRecovery(args, grant, preview, error, outputContext = {}) {
+    const command = replayCommand(args, grant.replay_key);
+    if (interactive) {
+        process.stderr.write(`We could not confirm this run’s outcome. Use the exact command below to inspect or resume the same run; do not start a new request:\n${command}\n`);
+    }
+    else {
+        emitJson({ operation: "run", ...outputContext, state: "outcome_unknown", request_preview: preview,
+            submission_intent: "recover_same_run", replay_key: grant.replay_key,
+            replay_command: command, error: safeErrorText(error),
+            next_action: { type: "replay_same_run", detail: "Run replay_command unchanged. It resumes this reservation and does not authorize a new run." } });
+    }
+    process.exitCode = 1;
+}
+async function runExecution(solver, args, outputContext = {}) {
     assertCommandFlags(args, 1, new Set(["--json", "--yes"]), new Set([
         "--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
-        "--max-runtime-s", "--data-class", "--idempotency-key",
+        "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--execution-id",
     ]), true);
+    const executionId = flagValue(args, "--execution-id");
+    if (executionId) {
+        const other = ["--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
+            "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--yes"]
+            .find(flag => hasFlag(args, flag));
+        if (other || args.slice(1).some(value => !value.startsWith("--") && value !== executionId)) {
+            throw new InspectionUsageError("Use millwork run --execution-id <id> [--json] by itself; inspection never submits work.");
+        }
+        return inspectExecution(solver, executionId, hasFlag(args, "--json"));
+    }
+    if (hasFlag(args, "--yes")) {
+        throw new InspectionUsageError("--yes cannot authorize a paid run. Every paid run in this profile needs a host-issued one-run approval written through the host's own approval channel; a flag, a prompt answer or a tool argument is not customer spending authority. Remove --yes and run the command again to see the approval this request needs, and ask the host administrator to configure the run-authorization boundary described in the SDK README.");
+    }
+    if (hasFlag(args, "--idempotency-key") && hasFlag(args, "--replay-key")) {
+        throw new InspectionUsageError("Pass one replay identity with --replay-key; --idempotency-key is its compatibility alias.");
+    }
     const positional = args.slice(1).filter((value, index, tail) => !value.startsWith("--")
         && (index === 0 || !new Set(["--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
-            "--max-runtime-s", "--data-class", "--idempotency-key"]).has(tail[index - 1])));
+            "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--execution-id"]).has(tail[index - 1])));
     const objective = flagValue(args, "--objective") ?? positional.join(" ");
     if (!objective)
         throw new InspectionUsageError("run requires an objective, for example: millwork run --preset <id> --objective \"Summarize this\"");
+    // A malformed command is answered as a malformed command, before anything
+    // about the environment is discussed.
+    const requestedDataClass = flagValue(args, "--data-class");
+    if (requestedDataClass !== undefined && !new Set(["public", "sandbox", "tenant_internal"]).has(requestedDataClass)) {
+        throw new InspectionUsageError("--data-class must be public, sandbox, or tenant_internal");
+    }
+    // Nothing about this request leaves the machine until the environment can
+    // show who, other than this process, is able to authorize the spending.
+    const resolution = await resolveRunAuthorizationBoundary();
+    if (!resolution.supported) {
+        const report = unsupportedRunBoundaryReport(resolution);
+        if (interactive) {
+            // The JSON branch has always carried the next action; a person reading
+            // this in a terminal needs the same handoff, not only the refusal.
+            process.stderr.write(`${UNSUPPORTED_RUN_BOUNDARY_HEADLINE}\n${report.detail}\nChecked ${terminalText(report.attestation_file)}. Nothing was sent and no run was started.\n${UNSUPPORTED_RUN_BOUNDARY_NEXT_ACTION}\n`);
+        }
+        else {
+            emitJson({ operation: "run", ...outputContext, state: "action_required", ...report,
+                submission_intent: suppliedReplayKeyIntent(args),
+                next_action: { type: "use_supported_run_authorization_boundary",
+                    detail: UNSUPPORTED_RUN_BOUNDARY_NEXT_ACTION } });
+        }
+        process.exitCode = 2;
+        return;
+    }
+    const boundary = resolution.boundary;
     const selection = await solver.tenantTemplates.current();
     const preset = flagValue(args, "--preset");
     const armId = flagValue(args, "--arm-id") ?? selection?.managed_arm_id;
@@ -511,6 +1331,7 @@ async function runExecution(solver, args) {
         policy = {
             data_classes: [...selection.request_policy.data_classes],
             budget: { ...selection.request_policy.budget },
+            ...(selection.request_policy.on_eval ? { on_eval: [...selection.request_policy.on_eval] } : {}),
         };
     }
     else {
@@ -528,45 +1349,131 @@ async function runExecution(solver, args) {
     const [account, catalog, selectedArm] = await Promise.all([solver.account.get(), solver.modelCatalog.get(), solver.arms.get(armId)]);
     const model = catalog.models.find(row => row.deployment.model_deployment_id === selectedArm.model_deployment_id);
     const fee = account.billing?.platform_fee_usd_per_execution;
-    const costReview = { model_key: model?.model.model_key ?? null, arm_id: armId,
-        source_id: model?.source.source_id ?? null, access_lane: model?.connection.access_lane ?? null,
-        data_classes: [...policy.data_classes], max_runtime_s: policy.budget.max_runtime_s,
-        platform_fee_usd: fee ?? null,
-        model_budget_usd: policy.budget.max_cost_usd,
-        model_usage_payer: model?.connection.access_lane === "byok" ? "customer_provider_account" : model ? "millwork_credit" : "not_available",
-        combined_allowance_usd: fee === undefined ? null : Number((fee + policy.budget.max_cost_usd).toFixed(6)),
-        budget_note: "Model budget is a stop threshold, not a final quote; an in-flight call can exceed it." };
-    if (interactive)
-        process.stderr.write(`Model: ${terminalText(costReview.model_key ?? "not available")}\nProvider: ${terminalText(costReview.source_id ?? "not available")}\nLane: ${terminalText(costReview.access_lane ?? "not available")}\nData classes: ${costReview.data_classes.map(value => terminalText(value)).join(", ")}\nRuntime limit: ${costReview.max_runtime_s}s\nMillwork platform fee: ${fee === undefined ? "unavailable; review Billing" : `USD ${fee}`}\nModel usage budget: USD ${costReview.model_budget_usd} (${costReview.model_usage_payer})\nCombined allowance: ${costReview.combined_allowance_usd === null ? "unavailable" : `USD ${costReview.combined_allowance_usd}`}\n${costReview.budget_note}\n`);
-    if (!hasFlag(args, "--yes") && (!interactive || !await confirm(`Run exact arm ${armId} with a model budget of USD ${policy.budget.max_cost_usd} and ${policy.budget.max_runtime_s}s runtime? An in-flight model call can exceed its budget. [y/N] `))) {
-        process.stdout.write(interactive ? "cancelled\n" : `${JSON.stringify({ state: "action_required", cost_review: costReview,
-            next_action: { type: "approve_run", detail: "Review this exact model, provider, lane, data classes, runtime limit and costs with the user. Only after spending approval, rerun with --yes. --json is output formatting, not spending permission." } })}\n`);
-        if (!interactive)
-            process.exitCode = 2;
-        return;
+    const accessLane = model?.connection.access_lane;
+    const providerId = model?.source.source_id;
+    if (!model || !providerId || (accessLane !== "byok" && accessLane !== "millwork_pool")) {
+        throw new InspectionUsageError("The selected arm's provider and paid access lane are unavailable; no run was admitted.");
     }
-    const execution = await solver.executions.create({
+    const request = {
         task: { objective },
         policy,
         routing: { required_arm_id: armId },
         ...(flagValue(args, "--verifier-id") ? { verifier_id: flagValue(args, "--verifier-id") } : {}),
-    }, { idempotencyKey: flagValue(args, "--idempotency-key")
-            ?? `run:${createHash("sha256").update(JSON.stringify([objective, armId, Date.now()])).digest("hex")}` });
-    const deadline = Date.now() + (policy.budget.max_runtime_s + 30) * 1_000;
-    let current = execution;
-    while (!["completed", "failed", "cancelled", "expired"].includes(current.status) && Date.now() < deadline) {
-        await sleep(1_000);
-        current = await solver.executions.get(execution.execution_id);
+    };
+    const preview = previewRunRequest({ account_id: account.tenant_id, request, arm_id: armId,
+        provider_id: providerId, access_lane: accessLane, platform_fee_usd: fee ?? null });
+    const suppliedReplayKey = flagValue(args, "--replay-key") ?? flagValue(args, "--idempotency-key");
+    const submissionIntent = suppliedReplayKey ? "recover_same_run" : "new_run";
+    const replayKey = suppliedReplayKey ?? createRunReplayKey(preview);
+    const command = replayCommand(args, replayKey);
+    const costReview = { model_key: model.model.model_key, arm_id: armId,
+        source_id: model.source.source_id, access_lane: model.connection.access_lane,
+        data_classes: [...policy.data_classes], max_runtime_s: policy.budget.max_runtime_s,
+        platform_fee_usd: fee ?? null,
+        model_budget_usd: policy.budget.max_cost_usd,
+        model_usage_payer: model.connection.access_lane === "byok" ? "customer_provider_account" : "millwork_credit",
+        combined_allowance_usd: preview.declared_maximum_usd,
+        budget_note: "Model budget is a stop threshold, not a final quote; an in-flight call can exceed it." };
+    if (interactive)
+        process.stderr.write(`${runPreviewLines(request).map(line => `${terminalText(line)}\n`).join("")}Model: ${terminalText(costReview.model_key)}\nProvider: ${terminalText(providerId)}\nLane: ${terminalText(accessLane)}\nData classes: ${costReview.data_classes.map(value => terminalText(value)).join(", ")}\nRuntime limit: ${costReview.max_runtime_s}s\nMillwork platform fee: ${fee === undefined ? "unavailable; review Billing" : `USD ${fee}`}\nModel usage budget: USD ${costReview.model_budget_usd} (${costReview.model_usage_payer})\nCombined allowance: ${costReview.combined_allowance_usd === null ? "unavailable" : `USD ${costReview.combined_allowance_usd}`}\n${costReview.budget_note}\nRequest hash: ${terminalText(preview.request_hash)}\nReplay key: ${terminalText(replayKey)}${suppliedReplayKey ? "" : " (generated for this new-run request)"}\n`);
+    else
+        process.stderr.write(suppliedReplayKey
+            ? `Replay key before submission: ${replayKey}\n`
+            : `New-run replay key before submission: ${replayKey} (generated because no replay key was supplied).\n`);
+    const admission = new RunAdmissionStore({ boundary });
+    let grant;
+    try {
+        grant = await admission.admit({ preview, replayKey });
     }
-    if (!["completed", "failed", "cancelled", "expired"].includes(current.status)) {
-        throw new Error(`Execution ${execution.execution_id} did not reach a terminal state before the local wait bound. Inspect it; no retry was started.`);
+    catch (error) {
+        if (error instanceof RunAdmissionError && error.code === "charge_estimate_unavailable") {
+            if (interactive) {
+                process.stderr.write(`${error.message} Refresh account billing data before retrying; no run was admitted.\n`);
+            }
+            else {
+                emitJson({ operation: "run", ...outputContext, state: "action_required", refusal_code: error.code,
+                    cost_review: costReview, request_preview: preview, submission_intent: submissionIntent,
+                    replay_key: replayKey,
+                    next_action: { type: "refresh_billing_configuration", detail: "A known platform fee is required before a customer can authorize this paid run." } });
+            }
+            process.exitCode = 2;
+            return;
+        }
+        if (!(error instanceof RunAdmissionError) || !admissionNeedsHostApproval(error))
+            throw error;
+        // Whether a person is watching this terminal is not evidence about who is
+        // typing in it, so nothing here asks. The host answers, in a place this
+        // process cannot write, or the run does not happen.
+        const approval = await readHostOneRunApproval(boundary, preview, replayKey);
+        if (!approval) {
+            const requested = hostOneRunApprovalRequest(boundary, preview, replayKey);
+            if (interactive) {
+                process.stderr.write(requested.approval_file === null
+                    // Reaching this branch already read the account, catalog and arm to
+                    // price the request, so the only truthful claim left is about the
+                    // paid run itself. The zero-egress claim belongs to the earlier
+                    // unsupported-boundary refusal, which runs before any of that.
+                    ? `${UNSUPPORTED_RUN_BOUNDARY_HEADLINE}\nThis host attests no one-run approval channel, and nothing else in this profile can admit a paid run. No paid run was submitted.\n`
+                    // The approval binds this run's replay key, and a bare repeat of the
+                    // original command mints a different one. The exact command is
+                    // therefore printed, not described.
+                    : `This run needs the host's approval, which this terminal cannot give.\nAsk the host to write ${terminalText(requested.approval_file)} with:\n${JSON.stringify(requested.document, null, 2)}\nAfter the host creates this file, run this exact command:\n${command}\nNo paid run was submitted.\n`);
+            }
+            else {
+                emitJson({ operation: "run", ...outputContext, state: "action_required",
+                    refusal_code: requested.approval_file === null ? "unsupported_run_authorization_boundary" : "host_approval_required",
+                    admission_refusal_code: error.code,
+                    cost_review: costReview, request_preview: preview, submission_intent: submissionIntent,
+                    replay_key: replayKey, replay_command: command,
+                    host_approval: requested,
+                    next_action: requested.approval_file === null
+                        ? { type: "use_supported_run_authorization_boundary", detail: UNSUPPORTED_RUN_BOUNDARY_NEXT_ACTION }
+                        : { type: "obtain_host_one_run_approval", detail: "Ask the host administrator to create host_approval.approval_file using host_approval.document, then run replay_command unchanged." } });
+            }
+            process.exitCode = 2;
+            return;
+        }
+        grant = await admission.admit({ preview, replayKey, oneRunApproval: approval });
+    }
+    let execution;
+    if (grant.action === "inspect" && grant.execution_id) {
+        execution = await solver.executions.get(grant.execution_id);
+    }
+    else {
+        try {
+            execution = await solver.executions.create(request, { idempotencyKey: replayKey });
+            await admission.markAccepted(grant, execution.execution_id);
+        }
+        catch (error) {
+            if (error instanceof SolverApiError && grant.action === "submit" && suppliedReplayKey === undefined
+                && provesNoExecutionWasAccepted(error)) {
+                await admission.releaseAfterAuthoritativeRefusal(grant, `HTTP ${error.status}: ${error.message}`);
+                throw error;
+            }
+            emitRunRecovery(args, grant, preview, error, outputContext);
+            return;
+        }
+    }
+    let current;
+    try {
+        current = await waitForExecution(solver, execution, policy.budget.max_runtime_s);
+    }
+    catch (error) {
+        emitRunRecovery(args, grant, preview, error, outputContext);
+        return;
     }
     const result = current.status === "completed" ? await solver.executions.result(current.execution_id) : null;
     const receipt = await solver.receipts.get(current.execution_id);
+    if (receipt.totals) {
+        await admission.settle(grant, receipt.totals.usd + receipt.totals.platform_fee_usd);
+    }
     if (interactive)
-        process.stdout.write(`${result ? `${terminalText(result.final_text, true)}\n` : ""}Execution ${terminalText(current.execution_id)} — ${terminalText(current.status)}\nReceipt ${terminalText(current.execution_id)}\n${receiptCostLines(receipt).map((line) => `${line}\n`).join("")}`);
+        process.stdout.write(`${result ? `${terminalText(result.final_text, true)}\n` : ""}Execution ${terminalText(current.execution_id)} — ${terminalText(current.status)}\nReceipt ${terminalText(current.execution_id)}\n${[...receiptCostLines(receipt), ...runResultLines(receipt)].map((line) => `${terminalText(line)}\n`).join("")}`);
     else
-        emitJson({ operation: "run", execution: current, result, receipt });
+        emitJson({ operation: "run", ...outputContext, request_preview: preview, replay_key: replayKey,
+            submission_intent: submissionIntent,
+            replay_command: command, authorization: { kind: grant.authorization_kind, authorization_id: grant.authorization_id },
+            execution: current, result, receipt });
     if (current.status !== "completed")
         process.exitCode = 1;
 }
@@ -661,9 +1568,15 @@ async function main() {
         || (args[0] === "arms" && args[1] === "disable")
         || args[0] === "run"
         || (args[0] === "provider" && args[1] === "connect")
-        || (args[0] === "verifier" && args[1] === "attach");
+        || (args[0] === "verifier" && ["attach", "connect", "list", "show", "test"].includes(args[1] ?? "")
+            && !hasFlag(args, "--local"))
+        || (args[0] === "verifier" && VERIFIER_LIFECYCLE_COMMANDS.has(args[1] ?? ""));
+    if (args[0] === "verifier" && (args[1] === "init" || (args[1] === "test" && hasFlag(args, "--local")))) {
+        process.exitCode = await runVerifierKit(args, process.cwd(), interactive);
+        return;
+    }
     if (!tenantStart && !reconfiguration && !providerLifecycle) {
-        process.stderr.write("usage: millwork <docs|doctor|--version|models list|models use <catalog-model>|models add <catalog-model>|arms disable <arm-id>|run --preset <id> --objective <task>|provider list|provider connect <source-id>|provider rotate <connection-id>|provider disconnect <connection-id>|verifier attach --endpoint <url> --auth-ref <handle>|tenant show|tenant start> [options]\n");
+        process.stderr.write("usage: millwork <docs|doctor|--version|models list|models use <catalog-model>|models add <catalog-model>|arms disable <arm-id>|run --preset <id> --objective <task>|provider list|provider connect <source-id>|provider rotate <connection-id>|provider disconnect <connection-id>|verifier attach --endpoint <url> --auth-ref <handle>|verifier connect --endpoint <url> --access public|managed|verifier init|verifier test --local|verifier list|verifier show|verifier test|verifier <replace|restore|continue|disconnect> --verifier-id <id>|tenant show|tenant start> [options]\n");
         process.exit(2);
     }
     const missing = qualifyMissingCredential({
@@ -696,6 +1609,39 @@ async function main() {
         return runExecution(solver, args);
     if (args[0] === "verifier" && args[1] === "attach")
         return runVerifierAttach(solver, args);
+    if (args[0] === "verifier" && args[1] === "connect")
+        return runVerifierConnect(solver, args);
+    if (args[0] === "verifier" && args[1] === "list")
+        return runVerifierList(solver, args);
+    if (args[0] === "verifier" && args[1] === "show")
+        return runVerifierShow(solver, args);
+    if (args[0] === "verifier" && args[1] === "test")
+        return runVerifierRetest(solver, args);
+    if (args[0] === "verifier" && VERIFIER_LIFECYCLE_COMMANDS.has(args[1] ?? "")) {
+        try {
+            process.exitCode = await runVerifierLifecycle(solver, args[1], args, {
+                interactive,
+                out: (text) => process.stdout.write(terminalText(text, true)),
+                err: (text) => process.stderr.write(terminalText(text, true)),
+                emitJson,
+                existingSecret: process.env.VERIFIER_CONNECTION_SECRET,
+                readSecret: readMutedVerifierSecret,
+                openBrowser: openConsentBrowser,
+                environment: process.env,
+                platform: process.platform,
+                trustedIntakeOrigin: process.env.CUSTOMER_APP_ORIGIN,
+                serverOrigin: new URL(process.env.SOLVERAPI_BASE_URL ?? DEFAULT_API_BASE_URL).origin,
+                confirm,
+                apiKey: process.env.SOLVERAPI_API_KEY,
+            });
+        }
+        catch (error) {
+            if (error instanceof VerifierLifecycleUsageError)
+                throw new InspectionUsageError(error.message);
+            throw error;
+        }
+        return;
+    }
     const applicationId = flagValue(args, "--application-id");
     const resumeAction = flagValue(args, "--resume-action");
     const idempotencyKey = flagValue(args, "--idempotency-key");

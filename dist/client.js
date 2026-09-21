@@ -16,6 +16,54 @@ import { ComplianceExportsResource } from "./resources/complianceExports.js";
 import { VerifiersResource } from "./resources/verifiers.js";
 import { TenantTemplatesResource } from "./resources/tenantTemplates.js";
 /**
+ * Connection client for hidden `/v1` verifier-connection routes. The type name
+ * must not end in Resource so published wrapper discovery stays unchanged.
+ * This is not a public SDK surface.
+ */
+class UnpublishedVerifierConnection {
+    http;
+    constructor(http) {
+        this.http = http;
+    }
+    async createIntent(verifierId, stopChoice, opts) {
+        return this.http.request({
+            method: "POST",
+            path: `verifiers/${encodeURIComponent(verifierId)}/connection-intents`,
+            body: { stop_choice: stopChoice },
+            idempotencyKey: opts?.idempotencyKey,
+        });
+    }
+    async inspect(verifierId, opts) {
+        return this.http.request({
+            method: "GET",
+            path: `verifiers/${encodeURIComponent(verifierId)}/connection`,
+            query: opts?.operationKey ? { operation_key: opts.operationKey } : undefined,
+        });
+    }
+    /**
+     * `operationKey` names the lifecycle operation and is sent in the body, so
+     * a resume keeps the original operation while `idempotencyKey` gives this
+     * HTTP request its own replay context. Repeating the original request key
+     * would only replay its recorded response.
+     */
+    async testAndPromote(verifierId, input, opts) {
+        return this.http.request({
+            method: "POST",
+            path: `verifiers/${encodeURIComponent(verifierId)}/connection/test`,
+            body: opts?.operationKey ? { ...input, operation_key: opts.operationKey } : input,
+            idempotencyKey: opts?.idempotencyKey,
+        });
+    }
+    async revoke(verifierId, opts) {
+        return this.http.request({
+            method: "POST",
+            path: `verifiers/${encodeURIComponent(verifierId)}/connection/revoke`,
+            body: opts?.operationKey ? { operation_key: opts.operationKey } : undefined,
+            idempotencyKey: opts?.idempotencyKey,
+        });
+    }
+}
+/**
  * `new Solver({ apiKey, baseUrl, maxRetries, retryBackoffMs })`, per
  * the SDK documentation's "Client construction". One namespace per core
  * object. Every resource is a thin wrapper over its live v1 endpoint; no
@@ -31,6 +79,7 @@ import { TenantTemplatesResource } from "./resources/tenantTemplates.js";
 export class Solver {
     arms;
     verifiers;
+    verifierConnection;
     apiKeys;
     executions;
     receipts;
@@ -49,6 +98,7 @@ export class Solver {
         const http = new HttpClient(options);
         this.arms = new ArmsResource(http);
         this.verifiers = new VerifiersResource(http);
+        this.verifierConnection = new UnpublishedVerifierConnection(http);
         this.apiKeys = new ApiKeysResource(http);
         this.executions = new ExecutionsResource(http);
         this.receipts = new ReceiptsResource(http);

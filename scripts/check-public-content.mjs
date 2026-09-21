@@ -57,6 +57,13 @@ export const allowedUrlPatterns = [
   // This admits no concrete host, port, path, query or remote destination.
   /^http:\/\/\$\{expectedHost\}$/,
   /^https?:\/\/docs\.npmjs\.com\//,
+  // The exact placeholder and loopback destinations the shipped output-check
+  // kit contains, and only those. All three are reserved names (RFC 2606,
+  // RFC 6761) that cannot resolve to a real host. The app placeholder admits
+  // its bare origin for CUSTOMER_APP_ORIGIN plus the two reviewed paths.
+  /^https:\/\/app\.example(?:\/(?:millwork-check|healthz))?$/,
+  /^http:\/\/existing-app\.invalid$/,
+  /^http:\/\/127\.0\.0\.1:\$\{port\}\/$/,
   // Pinned, checksum-verified CI tooling download only.
   /^https:\/\/github\.com\/rhysd\/actionlint\//,
 ];
@@ -82,6 +89,14 @@ export const forbiddenPatterns = [
 // else points a permanent public reader at material that is not public.
 const pathReferencePattern = /(?:\.\.?\/)*[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+\.[A-Za-z]{1,5}\b/g;
 
+// Absolute host paths the product names on purpose. These are locations on the
+// machine running the CLI, not files this repository could ever ship, so the
+// "does it exist here?" rule does not apply to them. Each is listed exactly,
+// with its leading slash: a repository-relative lookalike still fails.
+const allowedHostPaths = [
+  "/etc/millwork/run-authorization-boundary.json",
+];
+
 
 export function scanTextContent(path, raw, { fileExists = defaultFileExists } = {}) {
   const failures = [];
@@ -105,7 +120,10 @@ export function scanTextContent(path, raw, { fileExists = defaultFileExists } = 
     : text;
   const shaMatch = textWithoutActionPins.match(/\b[0-9a-f]{40}\b/);
   if (shaMatch) failures.push(`${path}: bare 40-hex commit identifier outside a workflow action pin (commit-identifier)`);
-  for (const reference of text.match(pathReferencePattern) ?? []) {
+  for (const match of text.matchAll(pathReferencePattern)) {
+    const reference = match[0];
+    // Only when the match is the tail of one of those exact absolute paths.
+    if (allowedHostPaths.some((hostPath) => hostPath === `/${reference}` && text[match.index - 1] === "/")) continue;
     if (!fileExists(path, reference)) {
       failures.push(`${path}: reference to a file that is not public here (nonpublic-reference): ${reference}`);
     }
