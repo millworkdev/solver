@@ -27,6 +27,7 @@ export interface Arm {
     kind: ArmKind;
     display_name: string;
     status: ArmStatus;
+    model_lifecycle?: ModelLifecycle;
     capability_tags: string[];
     data_class_grants: DataClass[];
     cost_class?: CostClass;

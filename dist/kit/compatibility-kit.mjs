@@ -224,6 +224,9 @@ function describeStatus(observed) {
 }
 
 function matchesLabelledExpectation(observed, expectation) {
+  if (expectation.technical_failure !== undefined) {
+    return refused(observed, expectation.technical_failure.status);
+  }
   const invalid = validResult(observed);
   if (invalid !== null) return invalid;
   const verdict = observed.verdict;
@@ -251,8 +254,10 @@ function matchesLabelledExpectation(observed, expectation) {
 
 /**
  * Placement-specific cases the developer writes from their own check: each
- * names a candidate and the verdict the actual check gives it. At least one
- * must expect a pass and one a rejection, so both signals are exercised.
+ * names a candidate and either the verdict or technical failure the actual
+ * check gives it. At least one must expect a pass and one a rejection, so
+ * both verdict signals are exercised. A technical-failure case is optional
+ * for existing checks and required by the Cookbook overlays.
  */
 export function validateLabelledCases(labelledCases) {
   if (!Array.isArray(labelledCases) || labelledCases.length === 0) {
@@ -271,11 +276,21 @@ export function validateLabelledCases(labelledCases) {
     if (!Object.prototype.hasOwnProperty.call(labelled, "candidate")) {
       throw new KitUsageError(`Labelled case ${labelled.id} needs a candidate.`);
     }
-    if (typeof labelled.expect?.is_correct !== "boolean") {
-      throw new KitUsageError(`Labelled case ${labelled.id} needs expect.is_correct (true or false).`);
+    const verdict = typeof labelled.expect?.is_correct === "boolean";
+    const technical = labelled.expect?.technical_failure;
+    const technicalFailure = technical !== undefined
+      && technical !== null
+      && typeof technical === "object"
+      && [500, 504].includes(technical.status);
+    if (verdict === technicalFailure) {
+      throw new KitUsageError(
+        `Labelled case ${labelled.id} needs either expect.is_correct (true or false) or expect.technical_failure.status (500 or 504).`,
+      );
     }
   }
-  const expectations = labelledCases.map((labelled) => labelled.expect.is_correct);
+  const expectations = labelledCases
+    .filter((labelled) => typeof labelled.expect.is_correct === "boolean")
+    .map((labelled) => labelled.expect.is_correct);
   if (!expectations.includes(true) || !expectations.includes(false)) {
     throw new KitUsageError(
       "Supply at least one labelled case your check passes and one it rejects, so both verdicts are exercised.",
@@ -405,7 +420,7 @@ async function runSharedCases(context) {
     record(
       `labelled.${labelled.id}`,
       `Placement case: ${labelled.label}`,
-      false,
+      labelled.expect.technical_failure !== undefined,
       inEvaluationBound(observed, matchesLabelledExpectation(observed, labelled.expect)),
       observed,
     );
@@ -512,7 +527,7 @@ function generatedKey(purpose) {
  *   access:
  *     | { mode: "public" }
  *     | { mode: "authenticated", key?: string, overlapKeys?: string[], retiredKeys?: string[] },
- *   labelledCases: Array<{ id: string, label: string, candidate: unknown, expect: { is_correct: boolean, quality_score?: { min?: number, max?: number }, anchor_results?: Record<string, boolean> } }>,
+ *   labelledCases: Array<{ id: string, label: string, candidate: unknown, expect: { is_correct?: boolean, quality_score?: { min?: number, max?: number }, anchor_results?: Record<string, boolean>, technical_failure?: { status: 500 | 504 } } }>,
  *   bounds?: { probeMs?: number, evaluationMs?: number },
  * }} options
  */

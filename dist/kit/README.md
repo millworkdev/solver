@@ -17,8 +17,43 @@ below is run from that directory.
 | `compatibility-kit.mjs` | The kit (`millwork-output-check-kit` 1.0.0). |
 | `check-endpoint.mjs` | Runs the kit from a terminal. |
 | `listing-example-check.mjs` | The listing example packaged as kit input. Copy it for your own check. |
+| `minimal-output-check.mjs` | Recipe 0's deliberately small non-empty-output check. |
+| `recipe-a-structured-output.mjs` | Exact schema, identifier and arithmetic policy overlay. |
+| `recipe-b-semantic-judgment.mjs` | Typed semantic judgment composed with exact checks and tenant thresholds. |
+| `recipe-c-evaluator-adapter.mjs` | Thin existing-evaluator translation with tenant-owned hard policy. |
+| `recipe-d-completion-evidence.mjs` | Agent or pipeline completion backed by a trusted evidence store. |
 | `existing-node-app.mjs` | Maintained existing-app route composition and runnable deployment example. |
+| `minimal-node-dock.mjs` | Small public Node dock for learning the request and response boundary. |
+| `minimal-python-dock.py` | Small public Python dock for learning the same boundary without Node. |
 | `DEPLOYMENT_RECIPE.md` | HTTPS deployment, measurement, key overlap/removal and recovery recipe. |
+
+## Choose a recipe overlay
+
+The default command remains compatible and selects `listing-example-check.mjs`:
+
+```bash
+millwork verifier init output-check
+```
+
+When you already know the decision shape, select one maintained overlay. The
+command still writes the entire kit, so changing recipes never forks the dock,
+access or lifecycle code.
+
+```bash
+millwork verifier init output-check-a --recipe a
+```
+
+Use `0` for the deliberately small non-empty-output check, `a` for structured output and exact policy, `b` for typed semantic
+judgment, `c` for an existing evaluator adapter, or `d` for agent or pipeline
+completion. The command prints the selected module and the exact local test to
+run next. Each overlay includes a labelled pass, rejection and technical
+failure. Replace its example policy and fixtures with evidence from your own
+domain before deployment.
+
+The Python dock is intentionally small and public. It demonstrates the wire
+shape, reserved probe and status behavior. Use `handler.mjs` for the maintained
+body, timeout and authenticated-access protections, or implement equivalent
+protections in the non-Node server you deploy.
 
 ## Candidate mapping
 
@@ -101,8 +136,9 @@ deadline bounds waiting, not work: it cannot interrupt a synchronous loop.
 ## Test it with the kit
 
 Write labelled cases from your own check: each names a candidate and the
-verdict your check actually gives it, with at least one it passes and one it
-rejects. See `listing-example-check.mjs`.
+verdict or technical failure your check actually gives it, with at least one
+it passes and one it rejects. See `listing-example-check.mjs` and the four
+recipe overlays.
 
 **Locally**, before any account or credential:
 

@@ -6,7 +6,7 @@
     "apply the private export recipe's single-line replacement table in order"
   ],
   "aggregate_digest_formula": "sha256 over the sorted lines '<sha256>  ./<path relative to dist>\\n' of every exported file",
-  "file_count": 91,
+  "file_count": 98,
   "files": [
     {
       "path": "dist/cli.d.ts",
@@ -90,11 +90,11 @@
     },
     {
       "path": "dist/cliVerifierKit.d.ts",
-      "sha256": "7a1bdd2d7e9571caf1a251cb16b9dd7d9e8736030861203cbb7447d72c0a5746"
+      "sha256": "51ab41b01e4dc0dba64772b38f87a7425ed3fd07e60d5addd5daea5ebf303bc3"
     },
     {
       "path": "dist/cliVerifierKit.js",
-      "sha256": "13a4213115a60408967b724aac13b5d9a5bb53bcf0418087e2c1c40679b152b8"
+      "sha256": "bf45edf2a76991f08f47984064178657db4789e75a45516b6c175887b66675dc"
     },
     {
       "path": "dist/contractGuards.d.ts",
@@ -134,7 +134,7 @@
     },
     {
       "path": "dist/kit/compatibility-kit.mjs",
-      "sha256": "a439c55a5c9a21595d49934a9128bf82eaa33f128099b6aaa300728639b6fe6b"
+      "sha256": "dae4206beda97bf625857ee2cfd4d91e1b3b89e3034c7b216e0f41adcdb5f440"
     },
     {
       "path": "dist/kit/DEPLOYMENT_RECIPE.md",
@@ -153,8 +153,36 @@
       "sha256": "b18cbd8c6cecbf4d79d1921946dea0b4548bd76657134bbfd40d8d22d68e8bee"
     },
     {
+      "path": "dist/kit/minimal-node-dock.mjs",
+      "sha256": "4274bfeeb5ed8274a6015a576846ff6b9eb67522c683d6d8533f52336176ffbb"
+    },
+    {
+      "path": "dist/kit/minimal-output-check.mjs",
+      "sha256": "c8f7fe2c684dde37762970128ab672af8d5929c48b8d33b086c16317f2850977"
+    },
+    {
+      "path": "dist/kit/minimal-python-dock.py",
+      "sha256": "12145f34353801db9c329fc9492e025ac339882fddacb10a854d6c6e3c3244fd"
+    },
+    {
       "path": "dist/kit/README.md",
-      "sha256": "dacd0dbeebd0dbad05684ff3d5eae79f82a16d510193d7e0539595bd082e64b3"
+      "sha256": "9e0cafdce86cab79f5cb39168cd2e43955a09fce17d1730b5da3af60b49d1b08"
+    },
+    {
+      "path": "dist/kit/recipe-a-structured-output.mjs",
+      "sha256": "5a721c00cf48aa85ccb67cb7ce56f6f692bfaa7d6cf5e4807a57d2e5c07a64a0"
+    },
+    {
+      "path": "dist/kit/recipe-b-semantic-judgment.mjs",
+      "sha256": "4c075b85d69e1303453b38ec90a8344a8f333fe76d923602e588e484901777f9"
+    },
+    {
+      "path": "dist/kit/recipe-c-evaluator-adapter.mjs",
+      "sha256": "c804c5ee6c233364bc80770992e6b670ab9481cd9a406b97be2a1adbf0e849dc"
+    },
+    {
+      "path": "dist/kit/recipe-d-completion-evidence.mjs",
+      "sha256": "7ef9ebef39fec3073dfb94d3b12c4a6a8f8b6fecdeac4098418073ccc115d7ab"
     },
     {
       "path": "dist/pagination.d.ts",
@@ -302,11 +330,11 @@
     },
     {
       "path": "dist/runAdmission.d.ts",
-      "sha256": "4504fedbf70271dc1830aaad78c531fa73dbf07e62a2ec584943b236bfe8f5ab"
+      "sha256": "2d48778a8ed2d934e56926395ee40b50f97955af670be204400b75d47f478cd7"
     },
     {
       "path": "dist/runAdmission.js",
-      "sha256": "d8098464864fee0fe1f69c6f321320ff896e9da540eb4a34754936561511fa4d"
+      "sha256": "dd8a35524111b7fea6bde5230ceda3e51647f74e0301301bc640aeb94870229a"
     },
     {
       "path": "dist/runAuthorizationBoundary.d.ts",
@@ -358,7 +386,7 @@
     },
     {
       "path": "dist/types.d.ts",
-      "sha256": "502f06a4cde213d291181344be443315064f2f6c86b0cd81da8572caa88c14fe"
+      "sha256": "8908a8a993726318011090997433b647b6504ff28a21d72731bb24f326ec95f8"
     },
     {
       "path": "dist/types.js",
@@ -373,5 +401,5 @@
       "sha256": "eba4a7197006215a72303b4b19f092eafd7ce09abd5394801c37ea6093b76f4c"
     }
   ],
-  "aggregate_sha256": "c2543e1225c9041cf41adb2fcbad4ff82995d140ac08f5fafb74f9c431c8238c"
+  "aggregate_sha256": "6127b620efcbf669007c365c053c515467fc674c5fc13bdbfe52426779b5cf38"
 }
