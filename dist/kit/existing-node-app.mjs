@@ -20,7 +20,7 @@ import {
 import {
   runHardCheck as exampleHardCheck,
   scoreQuality as exampleQualityScore,
-} from "./listing-example-check.mjs";
+} from "./selected-check.mjs";
 
 export const OUTPUT_CHECK_PATH = "/millwork-check";
 export const HEALTH_PATH = "/healthz";

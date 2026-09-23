@@ -1,4 +1,4 @@
-import { access, copyFile, lstat, mkdir, realpath, rm } from "node:fs/promises";
+import { access, copyFile, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,12 +10,29 @@ export const MAINTAINED_KIT_FILES = [
     "compatibility-kit.mjs",
     "check-endpoint.mjs",
     "listing-example-check.mjs",
+    "minimal-output-check.mjs",
+    "recipe-a-structured-output.mjs",
+    "recipe-b-semantic-judgment.mjs",
+    "recipe-c-evaluator-adapter.mjs",
+    "recipe-d-completion-evidence.mjs",
+    "selected-check.mjs",
     "existing-node-app.mjs",
+    "minimal-node-dock.mjs",
+    "minimal-python-dock.py",
     "README.md",
     "DEPLOYMENT_RECIPE.md",
 ];
+export const RECIPE_CHECK_FILES = Object.freeze({
+    default: "listing-example-check.mjs",
+    "0": "minimal-output-check.mjs",
+    a: "recipe-a-structured-output.mjs",
+    b: "recipe-b-semantic-judgment.mjs",
+    c: "recipe-c-evaluator-adapter.mjs",
+    d: "recipe-d-completion-evidence.mjs",
+});
 const CREDENTIAL_ARGUMENT = /^--(key|token|secret|password|bearer|api-key|credential)/i;
 const RECIPE_FILE = "DEPLOYMENT_RECIPE.md";
+const SELECTED_CHECK_FILE = "selected-check.mjs";
 function flagValue(args, name) {
     const index = args.indexOf(name);
     return index >= 0 ? args[index + 1] : undefined;
@@ -116,7 +133,7 @@ async function resolveInitDirectory(cwd, args) {
     }
     return assertInsideWorkspace(cwd, requested, refusal);
 }
-async function copyMaintainedKit(sourceRoot, destination) {
+async function copyMaintainedKit(sourceRoot, destination, selectedCheck) {
     const collisions = [];
     const links = [];
     for (const file of MAINTAINED_KIT_FILES) {
@@ -152,7 +169,16 @@ async function copyMaintainedKit(sourceRoot, destination) {
         for (const file of MAINTAINED_KIT_FILES) {
             // Exclusive creation: whatever appears between the check above and this
             // write -- a link, a file -- the copy fails instead of following it.
-            await copyFile(join(sourceRoot, file), join(destination, file), fsConstants.COPYFILE_EXCL);
+            if (file === SELECTED_CHECK_FILE) {
+                // The exported kit carries the default selector; init writes one
+                // deterministic selector for the requested overlay. No generated
+                // module path comes from free-form user input.
+                await writeFile(join(destination, file), `/** The check deployed by this kit. \`millwork verifier init --recipe\` writes the selected overlay here. */\n`
+                    + `export { runHardCheck, scoreQuality, labelledCases } from "./${selectedCheck}";\n`, { flag: "wx" });
+            }
+            else {
+                await copyFile(join(sourceRoot, file), join(destination, file), fsConstants.COPYFILE_EXCL);
+            }
             written.push(file);
         }
     }
@@ -173,23 +199,33 @@ async function runVerifierInit(args, cwd, interactive) {
         if (CREDENTIAL_ARGUMENT.test(argument)) {
             throw new InspectionUsageError("Keys are not accepted as arguments. verifier init copies the maintained adapter and writes no secret.");
         }
-        if (argument.startsWith("--") && argument !== "--directory" && argument !== "--json") {
+        if (argument.startsWith("--") && argument !== "--directory" && argument !== "--recipe" && argument !== "--json") {
             throw new InspectionUsageError(`unknown argument: ${terminalText(argument)}`);
         }
     }
     if (hasFlag(args, "--directory") && (!flagValue(args, "--directory") || flagValue(args, "--directory").startsWith("--"))) {
         throw new InspectionUsageError("--directory requires a relative path");
     }
+    if (hasFlag(args, "--recipe") && (!flagValue(args, "--recipe") || flagValue(args, "--recipe").startsWith("--"))) {
+        throw new InspectionUsageError("--recipe requires default, 0, a, b, c or d");
+    }
+    const requestedRecipe = (flagValue(args, "--recipe") ?? "default").toLowerCase();
+    if (!Object.hasOwn(RECIPE_CHECK_FILES, requestedRecipe)) {
+        throw new InspectionUsageError("--recipe must be default, 0, a, b, c or d");
+    }
+    const selectedRecipe = requestedRecipe;
+    const selectedCheck = RECIPE_CHECK_FILES[selectedRecipe];
     const destination = await resolveInitDirectory(cwd, args);
     const sourceRoot = await findMaintainedKitRoot([dirname(fileURLToPath(import.meta.url)), cwd]);
-    const written = await copyMaintainedKit(sourceRoot, destination);
+    const written = await copyMaintainedKit(sourceRoot, destination, selectedCheck);
     const relativeDirectory = relative(cwd, destination) || ".";
     // One runnable command. A destination with a space stays one argument, and
     // no sentence is fused to the end of it.
-    const nextCommand = `cd ${shellPath(relativeDirectory)} && millwork verifier test --local --check listing-example-check.mjs --access authenticated`;
-    const afterThat = `Deploy with ${RECIPE_FILE} in that directory. Then follow "Connect the deployed URL to Millwork" in README.md and choose the commands for your endpoint's access mode.`;
+    const nextCommand = `cd ${shellPath(relativeDirectory)} && millwork verifier test --local --check ${SELECTED_CHECK_FILE} --access authenticated --json`;
+    const afterThat = `Deploy ${SELECTED_CHECK_FILE} with ${RECIPE_FILE} in that directory. Then follow "Connect the deployed URL to Millwork" in README.md and choose the commands for your endpoint's access mode.`;
     if (interactive) {
         process.stdout.write(`Wrote the maintained output-check adapter to ${terminalText(relativeDirectory)}.\n`
+            + `Selected recipe: ${selectedRecipe} (${selectedCheck}).\n`
             + `Files: ${written.join(", ")}.\n`
             + `Local contract test: ${nextCommand}\n`
             + `${afterThat}\n`
@@ -200,6 +236,9 @@ async function runVerifierInit(args, cwd, interactive) {
             operation: "verifier_init",
             directory: relativeDirectory,
             written,
+            selected_recipe: selectedRecipe,
+            selected_check: `${relativeDirectory}/${selectedCheck}`,
+            deployed_check: `${relativeDirectory}/${SELECTED_CHECK_FILE}`,
             recipe: `${relativeDirectory}/${RECIPE_FILE}`,
             next_action: nextCommand,
             after_that: afterThat,

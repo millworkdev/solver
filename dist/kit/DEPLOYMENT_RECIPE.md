@@ -1,6 +1,6 @@
 # Existing Node app deployment recipe
 
-This is the maintained placement recipe for adding the authenticated
+This is the maintained placement recipe for adding the
 output-check adapter to a Node 20 or newer HTTP application you already deploy.
 It creates one route in that application. It does not require another service,
 hosting vendor, database, queue, or asynchronous protocol.
@@ -20,8 +20,11 @@ The maintained example is [`existing-node-app.mjs`](existing-node-app.mjs):
 
 - runtime: Node.js 20 or newer;
 - health route: `GET /healthz`;
-- verifier route: `POST /millwork-check`;
+- output-check route: `POST /millwork-check`;
 - start command from the generated directory: `node existing-node-app.mjs`;
+- deployed check: `selected-check.mjs`, written by `millwork verifier init`
+  to re-export the example check selected with `--recipe` (or the listing example
+  when no recipe is selected);
 - port: integer `PORT`, default `8080`;
 - endpoint access: Bearer keys from `MILLWORK_VERIFIER_KEYS`;
 - probe budget: 3 seconds; evaluation budget: 10 seconds;
@@ -38,7 +41,7 @@ Keep the existing app's listener and compose the adapter before its fallback:
 ```javascript
 import { createServer } from "node:http";
 import { createExistingNodeAppListener } from "./existing-node-app.mjs";
-import { runHardCheck, scoreQuality } from "./listing-example-check.mjs";
+import { runHardCheck, scoreQuality } from "./selected-check.mjs";
 
 const existingApp = async (request, response) => {
   // The routes your application already serves.
@@ -56,8 +59,10 @@ The listener handles `/millwork-check` and `GET /healthz`. Other requests go to
 `otherwise`. If your app already serves `/healthz`, pass `healthPath: null` to
 keep that route. Use the actual hard check
 and quality scorer you already run. The direct start command imports
-`runHardCheck` and `scoreQuality` from `listing-example-check.mjs`, so it runs
-the same example you edited and tested locally.
+`runHardCheck` and `scoreQuality` from `selected-check.mjs`, which points to
+the example check selected at init. Keep that file beside the selected check when
+you deploy. If you change checks later, scaffold a new directory and retest
+it before switching the endpoint.
 
 `createExistingNodeAppListener` uses authenticated access by default. To serve
 a public endpoint, pass `access: publicAccess()`, as shown below.
@@ -77,22 +82,22 @@ public endpoint, skip to the next section; none of these steps apply there.
    owns that path, and record your own health check instead.
 4. Load `MILLWORK_KIT_ENDPOINT_KEY` from your secret manager or a private
    terminal you control. Keep its value out of command text, shell history and
-   assistant output. Then run the compatibility kit against the public HTTPS
+   assistant output. Then run the compatibility kit against the internet-reachable HTTPS
    route:
 
    ```bash
    node check-endpoint.mjs \
      --deployed https://app.example/millwork-check \
      --authorize-endpoint-test \
-     --check listing-example-check.mjs \
+     --check selected-check.mjs \
      --access authenticated --json
    ```
 
-The kit deliberately sends passing, rejecting, malformed, unauthenticated,
-probe-shaped, chunked, and technical-failure cases. Run it only against an
-endpoint where you are authorized to create that traffic. Reports retain status,
-bounded elapsed time, and verdict shape; they redact credentials and response
-free text.
+   The kit sends passing, rejecting, malformed, unauthenticated, probe-shaped,
+   and chunked cases. Local-only faults are skipped on the deployed endpoint;
+   no candidate asks the check to fail. Run this only where you are authorized
+   to create that traffic. Reports retain status, bounded elapsed time, and
+   verdict shape; they redact credentials and response free text.
 
 ## Configure and deploy a public endpoint
 
@@ -110,7 +115,7 @@ the authenticated branch has them:
 import { createServer } from "node:http";
 import { publicAccess } from "./handler.mjs";
 import { createExistingNodeAppListener } from "./existing-node-app.mjs";
-import { runHardCheck, scoreQuality } from "./listing-example-check.mjs";
+import { runHardCheck, scoreQuality } from "./selected-check.mjs";
 
 const existingApp = async (request, response) => {
   // The routes your application already serves.
@@ -143,13 +148,13 @@ public by omission.
    node check-endpoint.mjs \
      --deployed https://app.example/millwork-check \
      --authorize-endpoint-test \
-     --check listing-example-check.mjs \
+     --check selected-check.mjs \
      --access public --json
    ```
 
-   The kit still sends passing, rejecting, malformed, probe-shaped, chunked and
-   technical-failure cases, so run it only against an endpoint where you are
-   authorized to create that traffic. It records the endpoint's public access in
+   The kit still sends passing, rejecting, malformed, probe-shaped and chunked
+   cases; local-only faults are skipped. Run it only against an endpoint where
+   you are authorized to create that traffic. It records the endpoint's public access in
    place of the missing-key and wrong-key refusals, which cannot apply here.
 4. Connect the deployed URL, exactly as **Connect the deployed URL to Millwork**
    in README.md describes for a public endpoint. `--name` and `--version` are
@@ -182,7 +187,7 @@ After a fresh deploy or host restart, run the deployed kit once and retain its
 JSON as the **cold observation**. Run it again without a configuration change as
 the **warm observation**. Record:
 
-- the exact deployment revision and public HTTPS URL;
+- the exact deployment revision and internet-reachable HTTPS URL;
 - Node and adapter versions from `/healthz`;
 - the host's restart/cold-start event or deployment identifier;
 - the first and second kit reports, including per-case elapsed milliseconds;
@@ -212,7 +217,7 @@ unless the running process actually receives one.
    node check-endpoint.mjs \
      --deployed https://app.example/millwork-check \
      --authorize-endpoint-test \
-     --check listing-example-check.mjs \
+     --check selected-check.mjs \
      --access authenticated --json
    ```
 
@@ -232,7 +237,7 @@ unless the running process actually receives one.
    node check-endpoint.mjs \
      --deployed https://app.example/millwork-check \
      --authorize-endpoint-test \
-     --check listing-example-check.mjs \
+     --check selected-check.mjs \
      --access authenticated --json
    ```
 

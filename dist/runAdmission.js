@@ -542,6 +542,31 @@ export class RunAdmissionStore {
             reservation.charged_usd = money(chargedUsd);
         });
     }
+    /**
+     * Settle an accepted reservation from an authoritative receipt when the
+     * caller recovered through another surface (for example MCP after CLI, or
+     * CLI after MCP) and therefore no longer holds the original in-memory grant.
+     */
+    async settleAcceptedExecution(executionId, chargedUsd) {
+        if (!executionId.trim() || !numeric(chargedUsd)) {
+            throw new RunAdmissionError("admission_storage_unavailable", "Receipt settlement requires an execution id and non-negative charge.");
+        }
+        return withRecoveryJournal(this.journalFile, this.now, async (journal) => {
+            const matches = Object.values(journal.reservations).filter((reservation) => reservation.execution_id === executionId);
+            if (matches.length === 0)
+                return false;
+            if (matches.length !== 1) {
+                throw new RunAdmissionError("admission_storage_unavailable", "More than one run admission reservation names this execution.");
+            }
+            const reservation = matches[0];
+            if (reservation.state !== "accepted" && reservation.state !== "settled") {
+                throw new RunAdmissionError("admission_storage_unavailable", "Only an accepted execution can settle from a receipt.");
+            }
+            reservation.state = "settled";
+            reservation.charged_usd = money(chargedUsd);
+            return true;
+        });
+    }
     async releaseAfterAuthoritativeRefusal(grant, reason) {
         await this.updateReservation(grant, (reservation) => {
             if (reservation.state !== "reserved" || reservation.execution_id !== null) {
