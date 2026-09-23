@@ -21,6 +21,7 @@ import { planByokChoice, byokChoice, resolveApprovedByokChoice, assertRecoveredB
 import { resolveProviderLifecycleCommand, runProviderLifecycle, providerLifecycleSummary, ProviderInspectionError } from "./cliProviderLifecycle.js";
 import { runVerifierKit } from "./cliVerifierKit.js";
 import { runPreviewLines, runResultLines } from "./runResultOutput.js";
+import { ModelAddPolicyError, modelAddOperationKey, normalizeModelAddRequest, } from "./modelAddPolicy.js";
 import { applicationSummary, receiptCostLines, readySetupRecovery, newSetupPlanOutput, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, tenantStartVerificationOnward, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
 import { acquireVerifierKeyEntry, submitVerifierIntake, trustedVerifierIntakeUrl, VERIFIER_LIFECYCLE_COMMANDS, VerifierIntakeError, VerifierLifecycleUsageError, runVerifierLifecycle, } from "./verifierLifecycleCli.js";
 const cliArgs = process.argv.slice(2);
@@ -61,6 +62,14 @@ const DEFAULT_POOL_FILE_MANIFEST = [
 function flagValue(args, name) {
     const index = args.indexOf(name);
     return index >= 0 ? args[index + 1] : undefined;
+}
+function flagValues(args, name) {
+    const values = [];
+    for (let index = 0; index < args.length; index += 1) {
+        if (args[index] === name && args[index + 1] !== undefined)
+            values.push(args[index + 1]);
+    }
+    return values.length > 0 ? values : undefined;
 }
 function hasFlag(args, name) {
     return args.includes(name);
@@ -353,8 +362,13 @@ function assertCommandFlags(args, start, booleans, values, allowPositionals = fa
 }
 function resolveCatalogModel(rows, requested, deploymentId) {
     const candidates = rows.filter((row) => deploymentId
-        ? row.deployment.model_deployment_id === deploymentId
+        ? row.deployment.model_deployment_id === deploymentId && row.model.model_key === requested
         : row.model.model_key === requested || row.deployment.model_deployment_id === requested);
+    if (deploymentId && candidates.length === 0) {
+        const deployment = rows.find((row) => row.deployment.model_deployment_id === deploymentId);
+        if (deployment)
+            throw new InspectionUsageError(`Model key ${terminalText(requested)} does not match deployment ${terminalText(deploymentId)} (${terminalText(deployment.model.model_key)}).`);
+    }
     if (candidates.length === 0)
         throw new InspectionUsageError(`No usable certified catalog model matches ${terminalText(deploymentId ?? requested)}. Run millwork models list.`);
     if (candidates.length > 1) {
@@ -429,25 +443,81 @@ async function runModelUse(solver, args) {
     });
 }
 async function runModelAdd(solver, args) {
-    assertCommandFlags(args, 3, new Set(["--json", "--yes"]), new Set(["--model-deployment-id", "--idempotency-key"]));
+    assertCommandFlags(args, 3, new Set(["--json", "--yes", "--clear-capability-tags"]), new Set(["--model-deployment-id", "--idempotency-key", "--tenant-id", "--display-name", "--capability-tag", "--data-class"]));
     const requested = args[2];
     if (!requested || requested.startsWith("--"))
-        throw new InspectionUsageError("usage: millwork models add <catalog-model> [--model-deployment-id <id>]");
-    const row = resolveCatalogModel((await solver.modelCatalog.get()).models, requested, flagValue(args, "--model-deployment-id"));
-    if (!hasFlag(args, "--yes") && (!interactive || !await confirm(`Add ${row.model.model_key} as another ready arm without changing the current model? [y/N] `))) {
-        process.stdout.write(interactive ? "cancelled\n" : `${JSON.stringify({ state: "action_required", next_action: "re-run with --yes" })}\n`);
-        if (!interactive)
+        throw new InspectionUsageError("usage: millwork models add <model-key> [--model-deployment-id <id>] [--tenant-id <id>] [--display-name <name>] [--capability-tag <tag> | --clear-capability-tags] [--data-class <class>]");
+    const [catalog, account] = await Promise.all([solver.modelCatalog.get(), solver.account.get()]);
+    const row = resolveCatalogModel(catalog.models, requested, flagValue(args, "--model-deployment-id"));
+    const expectedTenantId = flagValue(args, "--tenant-id");
+    if (expectedTenantId && expectedTenantId !== account.tenant_id) {
+        throw new InspectionUsageError(`Authenticated tenant ${terminalText(account.tenant_id)} does not match --tenant-id ${terminalText(expectedTenantId)}.`);
+    }
+    let request;
+    try {
+        request = normalizeModelAddRequest(row, {
+            displayName: flagValue(args, "--display-name"),
+            capabilityTags: flagValues(args, "--capability-tag"),
+            clearCapabilityTags: hasFlag(args, "--clear-capability-tags"),
+            dataClassGrants: flagValues(args, "--data-class"),
+        });
+    }
+    catch (cause) {
+        if (cause instanceof ModelAddPolicyError)
+            throw new InspectionUsageError(cause.message);
+        throw cause;
+    }
+    const canPrompt = Boolean(input.isTTY) && Boolean(output.isTTY);
+    const jsonOutput = hasFlag(args, "--json") || !canPrompt;
+    if (!hasFlag(args, "--yes") && canPrompt) {
+        process.stderr.write([
+            "Register this exact model route:",
+            `  Organization ID: ${terminalText(account.tenant_id)}`,
+            `  Model key: ${terminalText(row.model.model_key)}`,
+            `  Model deployment ID: ${terminalText(row.deployment.model_deployment_id)}`,
+            `  Source: ${terminalText(row.source.source_id)}`,
+            `  Access lane: ${terminalText(row.connection.access_lane)}`,
+            `  Commercial owner: ${terminalText(row.connection.commercial_owner)}`,
+            ...(row.connection.access_lane === "byok"
+                ? [`  Connection ID: ${terminalText(row.connection.connection_id)}`]
+                : []),
+            "Selected policy:",
+            `  Display name: ${terminalText(request.display_name)}`,
+            `  Capabilities: ${request.capability_tags.map((value) => terminalText(value)).join(", ") || "none"}`,
+            `  Data classes: ${request.data_class_grants.map((value) => terminalText(value)).join(", ")}`,
+            `  Cost class: ${terminalText(request.cost_class)}`,
+            "Effect: Register one additional ready arm. Current model selection stays unchanged. No model call starts.",
+            "",
+        ].join("\n"));
+    }
+    if (!hasFlag(args, "--yes") && (!canPrompt || !await confirm("Register this arm? [y/N] "))) {
+        process.stdout.write(canPrompt ? "cancelled\n" : `${JSON.stringify({ state: "action_required", next_action: "re-run with --yes" })}\n`);
+        if (!canPrompt)
             process.exitCode = 2;
         return;
     }
-    const outcome = await solver.arms.create(row.arm_registration_template, {
+    const outcome = await solver.arms.create(request, {
         idempotencyKey: flagValue(args, "--idempotency-key")
-            ?? await defaultRequestKey(solver, `models-add:${row.deployment.model_deployment_id}`),
+            ?? await defaultRequestKey(solver, modelAddOperationKey(request)),
     });
-    if (interactive)
+    if (!jsonOutput)
         process.stdout.write(`Added arm ${terminalText(outcome.arm_id)} — ${terminalText(outcome.status)}. Current selection unchanged.\n`);
     else
-        emitJson({ operation: "models_add", ...outcome, selection_changed: false });
+        emitJson({
+            operation: "models_add",
+            ...outcome,
+            tenant_id: account.tenant_id,
+            model_key: row.model.model_key,
+            model_deployment_id: row.deployment.model_deployment_id,
+            requested_policy: {
+                display_name: request.display_name,
+                capability_tags: request.capability_tags,
+                data_class_grants: request.data_class_grants,
+                cost_class: request.cost_class,
+            },
+            selection_changed: false,
+            transport: "terminal_cli",
+        });
 }
 async function runArmDisable(solver, args) {
     assertCommandFlags(args, 3, new Set(["--json", "--yes"]), new Set(["--idempotency-key"]));

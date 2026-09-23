@@ -6,7 +6,7 @@
     "apply the private export recipe's single-line replacement table in order"
   ],
   "aggregate_digest_formula": "sha256 over the sorted lines '<sha256>  ./<path relative to dist>\\n' of every exported file",
-  "file_count": 99,
+  "file_count": 101,
   "files": [
     {
       "path": "dist/cli.d.ts",
@@ -14,7 +14,7 @@
     },
     {
       "path": "dist/cli.js",
-      "sha256": "cb4475e48f8a38dd84f7e2e9cddb4bdb7fe3a4695d5b055f09dd6e2b76f23abc"
+      "sha256": "823b6bd6f91723067d5b7473111b2b95d8e6498d8afa4d2fecace4287fe31195"
     },
     {
       "path": "dist/cliByokSelection.d.ts",
@@ -187,6 +187,14 @@
     {
       "path": "dist/kit/selected-check.mjs",
       "sha256": "be74f0a7c85ad983de96b376ac1f1790020d09de8b9194f45892d412cf4fcb12"
+    },
+    {
+      "path": "dist/modelAddPolicy.d.ts",
+      "sha256": "83e1df6de2861e602d5ff9ce847f205810a99b1f1b1fc0a7da3b7026ef420293"
+    },
+    {
+      "path": "dist/modelAddPolicy.js",
+      "sha256": "9855e46293155d38eacdecf65105e0537bcf2198242c583f9a645700d674ecaf"
     },
     {
       "path": "dist/pagination.d.ts",
@@ -405,5 +413,5 @@
       "sha256": "eba4a7197006215a72303b4b19f092eafd7ce09abd5394801c37ea6093b76f4c"
     }
   ],
-  "aggregate_sha256": "692f3a4a5163ed086df0b40d6d205a658f8b2f7b7eba5deba883611f622a0a63"
+  "aggregate_sha256": "50cfcfe74fd343218a3a8f26fa92478206898002ea327e5919929f7eea136e0d"
 }
