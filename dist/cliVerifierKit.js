@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { InspectionUsageError } from "./cliInspection.js";
 import { terminalText } from "./tenantStartOutput.js";
+import { LOCAL_ACCESS_MODES, VERIFIER_RECIPE_CHOICES, verifierCommandFlagSets, } from "./cliVerifierCapabilities.js";
 export const VERIFIER_KIT_OUTPUT_VERSION = "millwork.verifier-kit.v1";
 export const MAINTAINED_KIT_FILES = [
     "handler.mjs",
@@ -33,6 +34,9 @@ export const RECIPE_CHECK_FILES = Object.freeze({
 const CREDENTIAL_ARGUMENT = /^--(key|token|secret|password|bearer|api-key|credential)/i;
 const RECIPE_FILE = "DEPLOYMENT_RECIPE.md";
 const SELECTED_CHECK_FILE = "selected-check.mjs";
+function isLocalAccessMode(value) {
+    return LOCAL_ACCESS_MODES.includes(value);
+}
 function flagValue(args, name) {
     const index = args.indexOf(name);
     return index >= 0 ? args[index + 1] : undefined;
@@ -192,6 +196,7 @@ async function copyMaintainedKit(sourceRoot, destination, selectedCheck) {
     return written;
 }
 async function runVerifierInit(args, cwd, interactive) {
+    const initFlags = verifierCommandFlagSets("verifier init");
     if (hasFlag(args, "--local") || hasFlag(args, "--check") || hasFlag(args, "--access")) {
         throw new InspectionUsageError("verifier init only writes the maintained adapter. Use verifier test --local after the files exist.");
     }
@@ -199,7 +204,9 @@ async function runVerifierInit(args, cwd, interactive) {
         if (CREDENTIAL_ARGUMENT.test(argument)) {
             throw new InspectionUsageError("Keys are not accepted as arguments. verifier init copies the maintained adapter and writes no secret.");
         }
-        if (argument.startsWith("--") && argument !== "--directory" && argument !== "--recipe" && argument !== "--json") {
+        // The accepted set is the one `verifier capabilities` reports, so the
+        // two cannot disagree about what this command takes.
+        if (argument.startsWith("--") && !initFlags.booleans.has(argument) && !initFlags.values.has(argument)) {
             throw new InspectionUsageError(`unknown argument: ${terminalText(argument)}`);
         }
     }
@@ -210,7 +217,7 @@ async function runVerifierInit(args, cwd, interactive) {
         throw new InspectionUsageError("--recipe requires default, 0, a, b, c or d");
     }
     const requestedRecipe = (flagValue(args, "--recipe") ?? "default").toLowerCase();
-    if (!Object.hasOwn(RECIPE_CHECK_FILES, requestedRecipe)) {
+    if (!VERIFIER_RECIPE_CHOICES.includes(requestedRecipe)) {
         throw new InspectionUsageError("--recipe must be default, 0, a, b, c or d");
     }
     const selectedRecipe = requestedRecipe;
@@ -288,7 +295,7 @@ async function runVerifierLocalTest(args, cwd, interactive) {
     const check = flagValue(args, "--check");
     const access = flagValue(args, "--access");
     if (!check || check.startsWith("--") || !access) {
-        const nextAction = "pass --check <module> and --access public|authenticated; local tests do not invent those values";
+        const nextAction = `pass --check <module> and --access ${LOCAL_ACCESS_MODES.join("|")}; local tests do not invent those values`;
         if (interactive)
             process.stdout.write(`Local contract: not_usable.\nNext: ${nextAction}\n`);
         else {
@@ -301,8 +308,8 @@ async function runVerifierLocalTest(args, cwd, interactive) {
         }
         return 2;
     }
-    if (access !== "public" && access !== "authenticated") {
-        throw new InspectionUsageError("--access must be public or authenticated");
+    if (!isLocalAccessMode(access)) {
+        throw new InspectionUsageError(`--access must be ${LOCAL_ACCESS_MODES.join(" or ")}`);
     }
     const checkRefusal = "--check must be a path inside the current workspace, reached without a symbolic link. Point it at the file where it really lives, for example: --check kit/listing-example-check.mjs";
     if (check.includes("\0") || isAbsolute(check) || check.split(/[/\\]/).includes("..")) {

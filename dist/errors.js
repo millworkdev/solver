@@ -29,9 +29,12 @@ export class SolverApiError extends Error {
  */
 export class SolverApiNetworkError extends Error {
     cause;
-    constructor(message, cause) {
+    /** HTTP status when the response existed but its Problem body was unreadable. */
+    status;
+    constructor(message, cause, status) {
         super(message);
         this.name = "SolverApiNetworkError";
         this.cause = cause;
+        this.status = status;
     }
 }

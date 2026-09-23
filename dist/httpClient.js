@@ -114,7 +114,10 @@ export class HttpClient {
             body = (await response.json());
         }
         catch (cause) {
-            return new SolverApiNetworkError(`Received ${response.status} with a body that could not be parsed as a Problem response.`, cause);
+            return new SolverApiNetworkError(`Received ${response.status} with a body that could not be parsed as a Problem response.`, cause, response.status);
+        }
+        if (!body || typeof body.status !== "number" || typeof body.title !== "string" || body.status !== response.status) {
+            return new SolverApiNetworkError(`Received ${response.status} with an invalid Problem response.`, undefined, response.status);
         }
         return new SolverApiError(body);
     }
