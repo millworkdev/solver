@@ -16,16 +16,56 @@ below is run from that directory.
 | `handler.mjs` | The adapter (`millwork-output-check-adapter` 1.0.0). |
 | `compatibility-kit.mjs` | The kit (`millwork-output-check-kit` 1.0.0). |
 | `check-endpoint.mjs` | Runs the kit from a terminal. |
-| `listing-example-check.mjs` | The listing example packaged as kit input. Copy it for your own check. |
+| `listing-example-check.mjs` | The default listing example. Edit it in place, or point `selected-check.mjs` at your own file. |
+| `minimal-output-check.mjs` | Recipe 0's deliberately small non-empty-output check. |
+| `recipe-a-structured-output.mjs` | Exact schema, identifier and arithmetic example check. |
+| `recipe-b-semantic-judgment.mjs` | Typed semantic judgment with exact checks and your organization's thresholds. |
+| `recipe-c-evaluator-adapter.mjs` | Thin existing-evaluator translation with rules your organization owns. |
+| `recipe-d-completion-evidence.mjs` | Agent or pipeline completion backed by a trusted evidence store. |
+| `selected-check.mjs` | The selected check re-exported for local tests, the deployed app, and endpoint tests. |
 | `existing-node-app.mjs` | Maintained existing-app route composition and runnable deployment example. |
+| `minimal-node-dock.mjs` | Small public Node server for learning the request and response boundary. |
+| `minimal-python-dock.py` | Small public Python server for learning the same boundary without Node. |
 | `DEPLOYMENT_RECIPE.md` | HTTPS deployment, measurement, key overlap/removal and recovery recipe. |
+
+## Choose an example check
+
+When you omit `--recipe`, the command selects `listing-example-check.mjs`:
+
+```bash
+millwork verifier init output-check
+```
+
+When you already know the decision shape, select one maintained example check.
+Every recipe uses the same server, access, deployment, and recovery code.
+
+```bash
+millwork verifier init output-check-a --recipe a
+```
+
+Use `0` for the deliberately small non-empty-output check, `a` for structured output and exact policy, `b` for typed semantic
+judgment, `c` for an existing evaluator adapter, or `d` for agent or pipeline
+completion. The command prints the selected module and the exact local test to
+run next. Each example check includes a labelled pass, rejection and technical
+failure. Replace its example policy and fixtures with evidence from your own
+domain before deployment.
+
+`selected-check.mjs` is written for the recipe you chose. The runnable
+`existing-node-app.mjs` and both local and deployed tests use that file,
+so the endpoint runs the same rules you tested locally. Deploy the whole
+generated directory, including `selected-check.mjs` and the check it imports.
+
+The Python server is intentionally small and public. It demonstrates the wire
+shape, reserved probe and status behavior. Use `handler.mjs` for the maintained
+body, timeout and authenticated-access protections, or implement equivalent
+protections in the non-Node server you deploy.
 
 ## Candidate mapping
 
-- **Model arms** send a string. The adapter parses a JSON object or array
+- **Model output** arrives as a string. The adapter parses a JSON object or array
   string, treats other text as `{ "summary": "<text>" }` so an existing
   quality function can score it, and fail-closes unparseable `{` / `[` text.
-- **Agent arms** may send structured JSON. It is passed through unchanged.
+- **Structured agent output** arrives as JSON. It is passed through unchanged.
 - The reserved registration probe, and a `solverapi_probe` key anywhere in the
   candidate before or after parsing, get `is_correct: false`,
   `quality_score: 0` without running your check.
@@ -100,20 +140,24 @@ deadline bounds waiting, not work: it cannot interrupt a synchronous loop.
 
 ## Test it with the kit
 
-Write labelled cases from your own check: each names a candidate and the
-verdict your check actually gives it, with at least one it passes and one it
-rejects. See `listing-example-check.mjs`.
+Write labelled cases from your own check: each names a candidate and its
+expected verdict, with at least one pass and one rejection. For a local
+technical-failure case, set `fault: "check_throws"` or `fault: "invalid_result"`
+beside the candidate. The kit injects that fault into its own local listener;
+the candidate cannot request it, and the deployed test skips it. A genuine
+external failure can still be tested against a controlled endpoint. See
+`listing-example-check.mjs` and the four recipe checks.
 
 **Locally**, before any account or credential:
 
 ```bash
-node check-endpoint.mjs --local --check ./listing-example-check.mjs --access authenticated
+node check-endpoint.mjs --local --check ./selected-check.mjs --access authenticated
 ```
 
 This serves your check through this adapter on loopback with keys generated
-for the run, and also rotates them, breaks the check on purpose to confirm
-the technical-failure answers, and swaps only the quality scorer to confirm
-the hard verdict does not move.
+for the run. The kit rotates them, injects local faults to confirm no-verdict
+technical failures, and swaps only the quality scorer to confirm the hard
+verdict does not move.
 
 **Deployed**, against your https URL. This sends labelled test requests,
 including intentional failures, so it needs `--authorize-endpoint-test`.
@@ -126,7 +170,7 @@ credential, so the key is never part of the command. Then run:
 
 ```bash
 node check-endpoint.mjs --deployed https://app.example/millwork-check \
-  --authorize-endpoint-test --check ./listing-example-check.mjs --access authenticated
+  --authorize-endpoint-test --check ./selected-check.mjs --access authenticated
 ```
 
 While rotating, set `MILLWORK_KIT_OVERLAP_KEYS` to other keys the endpoint must
@@ -261,7 +305,7 @@ connection for you.
 
 To place this route in a Node application you already deploy, follow the
 [`existing-node-app.mjs` deployment recipe](DEPLOYMENT_RECIPE.md). It records
-the runtime and public HTTPS checks required for a real placement without
+the runtime and internet-reachable HTTPS checks required for a real placement without
 requiring a new service or hosting vendor.
 
 ## Secondary path

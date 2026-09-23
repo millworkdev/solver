@@ -47,9 +47,14 @@ export function isReservedProbe(candidate) {
 }
 
 export function containsProbeMarker(value) {
-  if (value === null || typeof value !== "object") return false;
-  if (Object.prototype.hasOwnProperty.call(value, "solverapi_probe")) return true;
-  return Object.values(value).some(containsProbeMarker);
+  const pending = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object") continue;
+    if (Object.prototype.hasOwnProperty.call(current, "solverapi_probe")) return true;
+    for (const child of Object.values(current)) pending.push(child);
+  }
+  return false;
 }
 
 /**

@@ -224,6 +224,9 @@ function describeStatus(observed) {
 }
 
 function matchesLabelledExpectation(observed, expectation) {
+  if (expectation.technical_failure !== undefined) {
+    return refused(observed, expectation.technical_failure.status);
+  }
   const invalid = validResult(observed);
   if (invalid !== null) return invalid;
   const verdict = observed.verdict;
@@ -251,8 +254,10 @@ function matchesLabelledExpectation(observed, expectation) {
 
 /**
  * Placement-specific cases the developer writes from their own check: each
- * names a candidate and the verdict the actual check gives it. At least one
- * must expect a pass and one a rejection, so both signals are exercised.
+ * names a candidate and its expected verdict or genuine technical failure.
+ * The optional `fault` makes a technical-failure case local-only by injecting
+ * it outside the candidate; never let solver-controlled output request a
+ * failure. At least one pass and one rejection are required.
  */
 export function validateLabelledCases(labelledCases) {
   if (!Array.isArray(labelledCases) || labelledCases.length === 0) {
@@ -271,11 +276,27 @@ export function validateLabelledCases(labelledCases) {
     if (!Object.prototype.hasOwnProperty.call(labelled, "candidate")) {
       throw new KitUsageError(`Labelled case ${labelled.id} needs a candidate.`);
     }
-    if (typeof labelled.expect?.is_correct !== "boolean") {
-      throw new KitUsageError(`Labelled case ${labelled.id} needs expect.is_correct (true or false).`);
+    const verdict = typeof labelled.expect?.is_correct === "boolean";
+    const technical = labelled.expect?.technical_failure;
+    const technicalFailure = technical !== undefined
+      && technical !== null
+      && typeof technical === "object"
+      && [500, 504].includes(technical.status);
+    if (verdict === technicalFailure) {
+      throw new KitUsageError(
+        `Labelled case ${labelled.id} needs either expect.is_correct (true or false) or expect.technical_failure.status (500 or 504).`,
+      );
+    }
+    if (labelled.fault !== undefined && !["check_throws", "invalid_result"].includes(labelled.fault)) {
+      throw new KitUsageError(`Labelled case ${labelled.id} has an unsupported local-only fault.`);
+    }
+    if (!technicalFailure && labelled.fault !== undefined) {
+      throw new KitUsageError(`Labelled case ${labelled.id} cannot put a fault on a verdict case.`);
     }
   }
-  const expectations = labelledCases.map((labelled) => labelled.expect.is_correct);
+  const expectations = labelledCases
+    .filter((labelled) => typeof labelled.expect.is_correct === "boolean")
+    .map((labelled) => labelled.expect.is_correct);
   if (!expectations.includes(true) || !expectations.includes(false)) {
     throw new KitUsageError(
       "Supply at least one labelled case your check passes and one it rejects, so both verdicts are exercised.",
@@ -396,6 +417,12 @@ async function runSharedCases(context) {
 
   const verdicts = new Map();
   for (const labelled of labelledCases) {
+    if (labelled.fault !== undefined) {
+      if (!context.local) {
+        record(`labelled.${labelled.id}`, `Local-only fault case: ${labelled.label}`, false, null, null, "not_applicable");
+      }
+      continue;
+    }
     const observed = await send({
       body: JSON.stringify({ candidate: labelled.candidate }),
       headers: validHeaders,
@@ -405,7 +432,7 @@ async function runSharedCases(context) {
     record(
       `labelled.${labelled.id}`,
       `Placement case: ${labelled.label}`,
-      false,
+      labelled.expect.technical_failure !== undefined,
       inEvaluationBound(observed, matchesLabelledExpectation(observed, labelled.expect)),
       observed,
     );
@@ -512,7 +539,7 @@ function generatedKey(purpose) {
  *   access:
  *     | { mode: "public" }
  *     | { mode: "authenticated", key?: string, overlapKeys?: string[], retiredKeys?: string[] },
- *   labelledCases: Array<{ id: string, label: string, candidate: unknown, expect: { is_correct: boolean, quality_score?: { min?: number, max?: number }, anchor_results?: Record<string, boolean> } }>,
+ *   labelledCases: Array<{ id: string, label: string, candidate: unknown, fault?: "check_throws" | "invalid_result", expect: { is_correct?: boolean, quality_score?: { min?: number, max?: number }, anchor_results?: Record<string, boolean>, technical_failure?: { status: 500 | 504 } } }>,
  *   bounds?: { probeMs?: number, evaluationMs?: number },
  * }} options
  */
@@ -550,7 +577,7 @@ async function runDeployed(target, accessOption, labelledCases, bounds) {
 
   const { cases, record } = createRecorder();
   const send = async (request) => observe(await sendRequest(url.href, request));
-  await runSharedCases({ send, access, bounds, labelledCases, record });
+  await runSharedCases({ send, access, bounds, labelledCases, record, local: false });
 
   const probeTimeout = bounds.probeMs + 1_000;
   for (const [index, key] of overlapKeys.entries()) {
@@ -612,7 +639,7 @@ async function runLocal(target, accessOption, labelledCases, bounds) {
   let verdicts;
   try {
     const send = async (request) => observe(await sendRequest(primary.url, request));
-    verdicts = await runSharedCases({ send, access, bounds, labelledCases, record });
+    verdicts = await runSharedCases({ send, access, bounds, labelledCases, record, local: true });
 
     if (access.mode === "authenticated") {
       acceptedKeys = [currentKey, replacementKey];
@@ -646,7 +673,7 @@ async function runLocal(target, accessOption, labelledCases, bounds) {
     await primary.close();
   }
 
-  await runTechnicalFailureCases({ serveWith, validHeaders: access.mode === "authenticated" ? () => bearer(acceptedKeys[0]) : () => ({}), record });
+  await runTechnicalFailureCases({ serveWith, validHeaders: access.mode === "authenticated" ? () => bearer(acceptedKeys[0]) : () => ({}), labelledCases, record });
   await runJudgeNoninterference({ serveWith, target, labelledCases, verdicts, validHeaders: access.mode === "authenticated" ? () => bearer(acceptedKeys[0]) : () => ({}), bounds, record });
 
   return buildReport({
@@ -658,7 +685,7 @@ async function runLocal(target, accessOption, labelledCases, bounds) {
 }
 
 /** The adapter's own answers when a check breaks: never an invented verdict. */
-async function runTechnicalFailureCases({ serveWith, validHeaders, record }) {
+async function runTechnicalFailureCases({ serveWith, validHeaders, labelledCases, record }) {
   const failures = [
     {
       id: "failure.check_throws",
@@ -695,6 +722,24 @@ async function runTechnicalFailureCases({ serveWith, validHeaders, record }) {
       await running.close();
     }
   }
+  for (const labelled of labelledCases) {
+    if (labelled.fault === undefined) continue;
+    const hooks = labelled.fault === "check_throws"
+      ? { runHardCheck: () => { throw new Error("local-only injected dependency failure"); }, scoreQuality: () => 0.5 }
+      : { runHardCheck: () => ({ is_correct: "invalid" }), scoreQuality: () => 0.5 };
+    const running = await serveWith(hooks);
+    try {
+      const observed = observe(await sendRequest(running.url, {
+        body: JSON.stringify({ candidate: labelled.candidate }),
+        headers: validHeaders(),
+        timeoutMs: 5_000,
+      }));
+      record(`labelled.${labelled.id}`, `Local-only fault case: ${labelled.label}`, true,
+        matchesLabelledExpectation(observed, labelled.expect), observed);
+    } finally {
+      await running.close();
+    }
+  }
 }
 
 /**
@@ -707,6 +752,7 @@ async function runJudgeNoninterference({ serveWith, target, labelledCases, verdi
     const running = await serveWith({ runHardCheck: target.runHardCheck, scoreQuality: () => forcedScore });
     try {
       for (const labelled of labelledCases) {
+        if (labelled.expect.technical_failure !== undefined) continue;
         const observed = observe(
           await sendRequest(running.url, {
             body: JSON.stringify({ candidate: labelled.candidate }),

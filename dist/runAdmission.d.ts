@@ -132,6 +132,12 @@ export declare class RunAdmissionStore {
     }): Promise<RunAdmissionGrant>;
     markAccepted(grant: RunAdmissionGrant, executionId: string): Promise<void>;
     settle(grant: RunAdmissionGrant, chargedUsd: number): Promise<void>;
+    /**
+     * Settle an accepted reservation from an authoritative receipt when the
+     * caller recovered through another surface (for example MCP after CLI, or
+     * CLI after MCP) and therefore no longer holds the original in-memory grant.
+     */
+    settleAcceptedExecution(executionId: string, chargedUsd: number): Promise<boolean>;
     releaseAfterAuthoritativeRefusal(grant: RunAdmissionGrant, reason: string): Promise<void>;
     private readHostLedger;
     /**

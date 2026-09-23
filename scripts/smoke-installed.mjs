@@ -64,7 +64,7 @@ try {
   });
   if (version.status !== 0 || version.stderr !== "") fail(`installed binary failed: ${version.stderr}`);
   const versionRecord = JSON.parse(version.stdout);
-  if (versionRecord.schema_version !== 2 || versionRecord.package_version !== "0.1.16"
+  if (versionRecord.schema_version !== 2 || versionRecord.package_version !== "0.1.17"
     || Object.hasOwn(versionRecord, "supported_public_version")
     || Object.hasOwn(versionRecord, "public_cli_available")) {
     fail(`installed binary identity is invalid: ${version.stdout}`);
@@ -98,7 +98,12 @@ try {
   const kitRecord = JSON.parse(kitRun.stdout);
   const expectedKitFiles = [
     "handler.mjs", "compatibility-kit.mjs", "check-endpoint.mjs",
-    "listing-example-check.mjs", "existing-node-app.mjs", "README.md", "DEPLOYMENT_RECIPE.md",
+    "listing-example-check.mjs", "minimal-output-check.mjs",
+    "recipe-a-structured-output.mjs", "recipe-b-semantic-judgment.mjs",
+    "recipe-c-evaluator-adapter.mjs", "recipe-d-completion-evidence.mjs",
+    "selected-check.mjs",
+    "existing-node-app.mjs", "minimal-node-dock.mjs", "minimal-python-dock.py",
+    "README.md", "DEPLOYMENT_RECIPE.md",
   ];
   if (JSON.stringify(kitRecord.written) !== JSON.stringify(expectedKitFiles)) {
     fail(`installed kit wrote an unexpected file set: ${JSON.stringify(kitRecord.written)}`);
@@ -128,8 +133,32 @@ try {
     }
   }
 
+  // A clean installed CLI must preserve recipe selection into the deployed
+  // selector; the default-kit smoke alone would miss a fallback to listing.
+  const selectedRun = spawnSync(binaryPath, ["verifier", "init", "recipe-a", "--recipe", "a", "--json"], {
+    cwd: userWorkspace,
+    encoding: "utf8",
+    env: cleanEnvironment,
+  });
+  if (selectedRun.status !== 0) fail(`installed recipe init failed: ${selectedRun.stdout}${selectedRun.stderr}`);
+  const selectedRecord = JSON.parse(selectedRun.stdout);
+  if (selectedRecord.selected_recipe !== "a" || selectedRecord.deployed_check !== join("recipe-a", "selected-check.mjs")) {
+    fail(`installed recipe selection drifted: ${selectedRun.stdout}`);
+  }
+  const selector = readFileSync(join(userWorkspace, selectedRecord.deployed_check), "utf8");
+  const selectedModule = "recipe-a-structured-output.mjs";
+  if (!selector.includes(`from ${JSON.stringify(`./${selectedModule}`)}`)) {
+    fail("installed deployment selector did not point at recipe A");
+  }
+  const selectedLocal = spawnSync(binaryPath, [
+    "verifier", "test", "--local", "--check", selectedRecord.deployed_check, "--access", "public", "--json",
+  ], { cwd: userWorkspace, encoding: "utf8", env: cleanEnvironment });
+  if (selectedLocal.status !== 0 || JSON.parse(selectedLocal.stdout).passed !== true) {
+    fail(`installed selected recipe did not pass locally: ${selectedLocal.stdout}${selectedLocal.stderr}`);
+  }
+
   process.stdout.write(
-    "installed smoke ok (module import, millwork binary, exact version, docs, output-check kit "
+    "installed smoke ok (module import, millwork binary, exact version, docs, selected output-check kit "
     + "in an isolated home from a spaced workspace, public and authenticated)\n",
   );
 } catch (error) {
