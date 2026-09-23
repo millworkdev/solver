@@ -37,5 +37,7 @@ export declare class SolverApiError extends Error {
  */
 export declare class SolverApiNetworkError extends Error {
     readonly cause?: unknown;
-    constructor(message: string, cause?: unknown);
+    /** HTTP status when the response existed but its Problem body was unreadable. */
+    readonly status?: number;
+    constructor(message: string, cause?: unknown, status?: number);
 }

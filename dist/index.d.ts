@@ -1,4 +1,6 @@
 export { Solver } from "./client.js";
+export { VerifierConnection } from "./verifierConnection.js";
+export type { VerifierStopChoice, VerifierConnectionIntent, VerifierLifecycleOutcome } from "./verifierConnection.js";
 export type { SolverClientOptions } from "./httpClient.js";
 export { bootstrapTenant } from "./resources/tenants.js";
 export { SolverApiError, SolverApiNetworkError } from "./errors.js";

@@ -64,7 +64,7 @@ try {
   });
   if (version.status !== 0 || version.stderr !== "") fail(`installed binary failed: ${version.stderr}`);
   const versionRecord = JSON.parse(version.stdout);
-  if (versionRecord.schema_version !== 2 || versionRecord.package_version !== "0.1.17"
+  if (versionRecord.schema_version !== 2 || versionRecord.package_version !== "0.1.18"
     || Object.hasOwn(versionRecord, "supported_public_version")
     || Object.hasOwn(versionRecord, "public_cli_available")) {
     fail(`installed binary identity is invalid: ${version.stdout}`);
@@ -82,6 +82,60 @@ try {
   }
   if (versionRecord.support_information_url !== docsRecord.url) {
     fail("installed version and docs commands disagree on the support information URL");
+  }
+
+  // Discovery, from the same clean install. An agent that has just installed
+  // this package runs --help first and must be able to get from there to the
+  // whole verifier surface without a key, a network call or a checkout. Every
+  // in-repository test of this passes with the repository one directory up,
+  // which is exactly the condition that hid the kit's own failures.
+  const help = spawnSync(binaryPath, ["--help"], { cwd: userWorkspace, encoding: "utf8", env: cleanEnvironment });
+  if (help.status !== 0) fail(`installed --help exited ${help.status}: ${help.stderr}`);
+  if (help.stderr !== "") fail("installed --help wrote to stderr; asking for help is not an error");
+  if (!help.stdout.includes("millwork verifier capabilities")) {
+    fail("installed --help does not route a reader to the verifier capability command");
+  }
+
+  const capabilities = spawnSync(binaryPath, ["verifier", "capabilities", "--json"], {
+    cwd: userWorkspace,
+    encoding: "utf8",
+    env: cleanEnvironment,
+  });
+  if (capabilities.status !== 0 || capabilities.stderr !== "") {
+    fail(`installed verifier capabilities failed: ${capabilities.stderr}`);
+  }
+  const capabilityRecord = JSON.parse(capabilities.stdout);
+  if (capabilityRecord.discovery?.account_key_required !== false || capabilityRecord.discovery?.network_calls !== 0) {
+    fail(`installed capability document does not describe itself as offline: ${capabilities.stdout}`);
+  }
+  if (capabilityRecord.package?.version !== versionRecord.package_version) {
+    fail("installed capability document and --version disagree about the package version");
+  }
+  if (!String(capabilityRecord.dock_contract?.url).startsWith("https://docs.getmillwork.dev/")) {
+    fail("installed capability document does not name the dock contract");
+  }
+  const reportedCommands = (capabilityRecord.commands ?? []).map((entry) => entry.command);
+  if (reportedCommands.length === 0 || reportedCommands.some((command) => !command.startsWith("millwork verifier "))) {
+    fail(`installed capability document reported commands outside the verifier surface: ${reportedCommands.join(", ")}`);
+  }
+
+  // An agent acts on what it just read. Every recipe the document publishes
+  // has to be one this installed binary will actually write.
+  const publishedRecipes = capabilityRecord.commands
+    .find((entry) => entry.command === "millwork verifier init")?.enum_values?.["--recipe"] ?? [];
+  if (publishedRecipes.length === 0) fail("installed capability document publishes no recipe choices");
+  for (const recipe of publishedRecipes) {
+    const attempt = spawnSync(binaryPath, ["verifier", "init", `published-${recipe}`, "--recipe", recipe, "--json"], {
+      cwd: userWorkspace,
+      encoding: "utf8",
+      env: cleanEnvironment,
+    });
+    if (attempt.status !== 0) {
+      fail(`installed capability document publishes --recipe ${recipe}, which the installed binary refused`);
+    }
+    if (JSON.parse(attempt.stdout).selected_recipe !== recipe) {
+      fail(`installed binary selected a different recipe than the published ${recipe}`);
+    }
   }
 
   // The output-check kit is only real if it works from the installed package,
@@ -158,8 +212,9 @@ try {
   }
 
   process.stdout.write(
-    "installed smoke ok (module import, millwork binary, exact version, docs, selected output-check kit "
-    + "in an isolated home from a spaced workspace, public and authenticated)\n",
+    "installed smoke ok (module import, millwork binary, exact version, docs, offline help and verifier "
+    + "capabilities with every published recipe written, selected output-check kit in an isolated home "
+    + "from a spaced workspace, public and authenticated)\n",
   );
 } catch (error) {
   fail(error.message);

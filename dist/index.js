@@ -1,4 +1,5 @@
 export { Solver } from "./client.js";
+export { VerifierConnection } from "./verifierConnection.js";
 export { bootstrapTenant } from "./resources/tenants.js";
 export { SolverApiError, SolverApiNetworkError } from "./errors.js";
 export { createRunReplayKey, hostOneRunApprovalRequest, previewRunRequest, readHostOneRunApproval, RunAdmissionError, RunAdmissionStore, } from "./runAdmission.js";
