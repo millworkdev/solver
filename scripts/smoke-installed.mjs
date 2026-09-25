@@ -64,7 +64,7 @@ try {
   });
   if (version.status !== 0 || version.stderr !== "") fail(`installed binary failed: ${version.stderr}`);
   const versionRecord = JSON.parse(version.stdout);
-  if (versionRecord.schema_version !== 2 || versionRecord.package_version !== "0.1.18"
+  if (versionRecord.schema_version !== 2 || versionRecord.package_version !== "0.1.19"
     || Object.hasOwn(versionRecord, "supported_public_version")
     || Object.hasOwn(versionRecord, "public_cli_available")) {
     fail(`installed binary identity is invalid: ${version.stdout}`);
