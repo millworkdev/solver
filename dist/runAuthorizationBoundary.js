@@ -12,7 +12,7 @@
 // group, because a record it can delete or overwrite is a record that says
 // whatever it needs to say. Where that isolation cannot be established this
 // module refuses the profile outright, before anything is sent.
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, readFile, readlink, stat } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 export const RUN_AUTHORIZATION_BOUNDARY_SCHEMA = "millwork.run-authorization-boundary/v1";
 export const HOST_RUN_AUTHORIZATION_ATTESTATION_FILE = "/etc/millwork/run-authorization-boundary.json";
@@ -44,40 +44,72 @@ function processUid() {
  * admission is checked against. Group write on the ledger directory is
  * therefore no different from no boundary at all.
  */
-async function hostOwnedChainFailure(path, uid) {
+export async function hostOwnedChainFailure(path, uid, hostPrincipalUid) {
+    // path.resolve collapses ".." before the kernel follows links. A path such
+    // as link/../file can therefore name a different file than the one we would
+    // inspect. Host attestation paths must not use that ambiguous spelling.
+    if (path.split("/").includes("..")) {
+        return { path, detail: `${path} contains a parent traversal component.` };
+    }
     const writeBits = 0o022;
-    let current = resolve(path);
-    for (;;) {
+    const activeLinks = new Set();
+    async function inspect(current) {
+        const parent = dirname(current);
+        const parentFailure = parent === current ? null : await inspect(parent);
         let details;
         try {
             details = await lstat(current);
         }
         catch (error) {
+            if (parentFailure)
+                return parentFailure;
             if (error.code === "ENOENT") {
                 return { path: current, detail: `${current} does not exist.` };
             }
             return { path: current, detail: `${current} could not be inspected.` };
         }
-        if (details.isSymbolicLink()) {
-            return { path: current, detail: `${current} is a symbolic link, so its target can be changed.` };
-        }
         if (details.uid === uid) {
             return {
                 path: current,
-                detail: `${current} is owned by this process's own principal, which can therefore rewrite it.`,
+                detail: `${current} is owned by this process's own principal, which can therefore rewrite it${details.isSymbolicLink() ? " (including its symbolic link)" : ""}.`,
             };
         }
-        if ((details.mode & writeBits) !== 0) {
+        if (hostPrincipalUid !== undefined && details.uid !== 0 && details.uid !== hostPrincipalUid) {
+            return { path: current, detail: `${current} is not owned by the attesting host principal or root.` };
+        }
+        // Symlink mode bits are not access controls on POSIX. Replacing a link
+        // requires write access to its parent, which was checked above.
+        if (!details.isSymbolicLink() && (details.mode & writeBits) !== 0) {
             return {
                 path: current,
                 detail: `${current} is writable by a principal other than its owner.`,
             };
         }
-        const parent = dirname(current);
-        if (parent === current)
+        // Name the deepest offending component, but never follow a link whose
+        // parent was unsafe: that parent could replace the link after inspection.
+        if (parentFailure)
+            return parentFailure;
+        if (!details.isSymbolicLink())
             return null;
-        current = parent;
+        if (activeLinks.has(current)) {
+            return { path: current, detail: `${current} is part of a symbolic link cycle.` };
+        }
+        activeLinks.add(current);
+        try {
+            const target = await readlink(current);
+            if (target.split("/").includes("..")) {
+                return { path: current, detail: `${current} symbolic link target contains a parent traversal component.` };
+            }
+            return await inspect(resolve(parent, target));
+        }
+        catch {
+            return { path: current, detail: `${current} symbolic link target could not be inspected.` };
+        }
+        finally {
+            activeLinks.delete(current);
+        }
     }
+    return inspect(resolve(path));
 }
 /**
  * The attested ledger itself, when it exists. The directory above it has
@@ -85,7 +117,7 @@ async function hostOwnedChainFailure(path, uid) {
  * created; what it rules out is a host that placed a file there and then left
  * it owned by, or writable by, somebody else.
  */
-async function hostOwnedLedgerFileFailure(path, hostPrincipalUid) {
+async function hostOwnedLedgerFileFailure(path, uid, hostPrincipalUid) {
     let details;
     try {
         details = await lstat(path);
@@ -98,8 +130,14 @@ async function hostOwnedLedgerFileFailure(path, hostPrincipalUid) {
             return null;
         return { path, detail: `${path} could not be inspected.` };
     }
-    if (details.isSymbolicLink()) {
-        return { path, detail: `${path} is a symbolic link, so its target can be changed.` };
+    const chainFailure = await hostOwnedChainFailure(path, uid, hostPrincipalUid);
+    if (chainFailure)
+        return chainFailure;
+    try {
+        details = await stat(path);
+    }
+    catch {
+        return { path, detail: `${path} could not be inspected.` };
     }
     if (!details.isFile()) {
         return { path, detail: `${path} is not a regular file.` };
@@ -230,7 +268,8 @@ export async function resolveRunAuthorizationBoundary(options = {}) {
     if (uid === undefined) {
         return unsupported(attestationFile, "host_principal_unavailable", "This platform exposes no process principal, so no separation between the agent and the approving host can be verified.");
     }
-    const attestationFailure = await hostOwnedChainFailure(attestationFile, uid);
+    const attestationStat = await stat(attestationFile).catch(() => null);
+    const attestationFailure = await hostOwnedChainFailure(attestationFile, uid, attestationStat?.uid);
     if (attestationFailure) {
         const missing = attestationFailure.detail.endsWith("does not exist.");
         return unsupported(attestationFile, missing ? "attestation_missing" : "attestation_not_host_owned", missing
@@ -240,7 +279,7 @@ export async function resolveRunAuthorizationBoundary(options = {}) {
     let document;
     let hostPrincipalUid;
     try {
-        hostPrincipalUid = (await lstat(attestationFile)).uid;
+        hostPrincipalUid = (await stat(attestationFile)).uid;
         document = JSON.parse(await readFile(attestationFile, "utf8"));
     }
     catch {
@@ -250,11 +289,11 @@ export async function resolveRunAuthorizationBoundary(options = {}) {
     if (!parsed.ok)
         return unsupported(attestationFile, "attestation_invalid", parsed.detail);
     const { ledgerFile, recoveryJournalFile, authorizationFile, approvalChannel } = parsed.attestation;
-    const ledgerFailure = await hostOwnedChainFailure(dirname(ledgerFile), uid);
+    const ledgerFailure = await hostOwnedChainFailure(dirname(ledgerFile), uid, hostPrincipalUid);
     if (ledgerFailure) {
         return unsupported(attestationFile, "ledger_directory_unusable", `The attested admission ledger directory is not isolated from this process: ${ledgerFailure.detail} A ledger this principal can write is a ledger it can reset, so no run is authorized from here.`);
     }
-    const ledgerFileFailure = await hostOwnedLedgerFileFailure(ledgerFile, hostPrincipalUid);
+    const ledgerFileFailure = await hostOwnedLedgerFileFailure(ledgerFile, uid, hostPrincipalUid);
     if (ledgerFileFailure) {
         return unsupported(attestationFile, "ledger_file_not_host_owned", `The attested admission ledger is not isolated from this process: ${ledgerFileFailure.detail}`);
     }
@@ -272,12 +311,12 @@ export async function resolveRunAuthorizationBoundary(options = {}) {
         return unsupported(attestationFile, "approval_channel_unavailable", `${attestationFile} attests no one-run approval channel. A paid run here rests on an approval the host writes where this process cannot, and nothing else in this profile can stand in for it, so no paid run can be authorized from this environment.`);
     }
     if (authorizationFile) {
-        const authorizationFailure = await hostOwnedChainFailure(authorizationFile, uid);
+        const authorizationFailure = await hostOwnedChainFailure(authorizationFile, uid, hostPrincipalUid);
         if (authorizationFailure) {
             return unsupported(attestationFile, "authorization_file_not_host_owned", `The attested standing authorization is not host-owned: ${authorizationFailure.detail}`);
         }
     }
-    const channelFailure = await hostOwnedChainFailure(approvalChannel.directory, uid);
+    const channelFailure = await hostOwnedChainFailure(approvalChannel.directory, uid, hostPrincipalUid);
     if (channelFailure) {
         return unsupported(attestationFile, "approval_channel_not_host_owned", `The attested one-run approval channel is not host-owned, so this process could write its own approval: ${channelFailure.detail}`);
     }

@@ -31,7 +31,7 @@ if (JSON.stringify(packedFiles) !== JSON.stringify(allowedPackedFiles)) {
 // publication candidate. Whether that version exists on the registry, and
 // which tag points at it, is a separate fact established by a registry
 // observation, not by this check.
-const CANDIDATE_VERSION = "0.1.18";
+const CANDIDATE_VERSION = "0.1.19";
 const manifest = JSON.parse(readFileSync(resolve(repositoryRoot, "package.json"), "utf8"));
 if (manifest.name !== "@millwork/solver") failures.push(`manifest name is ${manifest.name}`);
 if (manifest.version !== CANDIDATE_VERSION) {

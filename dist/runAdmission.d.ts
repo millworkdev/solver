@@ -1,4 +1,4 @@
-import type { RunAuthorizationBoundary } from "./runAuthorizationBoundary.js";
+import { type RunAuthorizationBoundary } from "./runAuthorizationBoundary.js";
 import type { DataClass, ExecutionRequest } from "./types.js";
 declare const ONE_RUN_APPROVAL_BRAND: unique symbol;
 declare const ONE_RUN_APPROVAL_SCHEMA = "millwork.one-run-approval/v1";

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { hostOwnedChainFailure } from "./runAuthorizationBoundary.js";
 const AUTHORIZATION_SCHEMA = "millwork.run-authorizations/v1";
 const LEDGER_SCHEMA = "millwork.run-admission-ledger/v1";
 const JOURNAL_SCHEMA = "millwork.run-admission-recovery-journal/v1";
@@ -205,7 +206,28 @@ async function secureRegularFile(path, purpose) {
  * cannot edit the record of having spent it, and group write hands it exactly
  * that.
  */
-async function requireHostLedgerDirectory(path) {
+// The boundary resolver has already checked every ancestor. Admission repeats
+// the ownership check when its own final directory or file is a link, so a
+// caller-supplied boundary cannot make that link into writable authority.
+async function followHostOwnedLink(path, details, hostPrincipalUid, purpose) {
+    if (!details.isSymbolicLink())
+        return details;
+    const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+    if (uid === undefined) {
+        throw new RunAdmissionError("admission_storage_insecure", `${purpose} cannot verify the calling principal.`);
+    }
+    const failure = await hostOwnedChainFailure(path, uid, hostPrincipalUid);
+    if (failure) {
+        throw new RunAdmissionError("admission_storage_insecure", `${purpose} is not host-owned: ${failure.detail}`);
+    }
+    try {
+        return await stat(path);
+    }
+    catch {
+        throw new RunAdmissionError("admission_storage_unavailable", `${purpose} could not be inspected.`);
+    }
+}
+async function requireHostLedgerDirectory(path, hostPrincipalUid) {
     let details;
     try {
         details = await lstat(path);
@@ -213,8 +235,9 @@ async function requireHostLedgerDirectory(path) {
     catch {
         throw new RunAdmissionError("admission_storage_unavailable", "The attested run admission directory does not exist. The host creates it; the CLI never invents it.");
     }
-    if (!details.isDirectory() || details.isSymbolicLink() || (details.mode & 0o022) !== 0) {
-        throw new RunAdmissionError("admission_storage_insecure", "Run admission directory must be a directory, must not be a symbolic link, and must not be writable by anyone but the host principal.");
+    details = await followHostOwnedLink(path, details, hostPrincipalUid, "Run admission directory");
+    if (!details.isDirectory() || (details.mode & 0o022) !== 0) {
+        throw new RunAdmissionError("admission_storage_insecure", "Run admission directory must be a host-controlled directory and must not be writable by anyone but the host principal.");
     }
 }
 /**
@@ -252,7 +275,8 @@ async function requireHostOwnedAuthorizationFile(path, hostPrincipalUid) {
             return;
         throw new RunAdmissionError("admission_storage_unavailable", "Run authorization file could not be inspected.");
     }
-    if (!details.isFile() || details.isSymbolicLink() || details.uid !== hostPrincipalUid
+    details = await followHostOwnedLink(path, details, hostPrincipalUid, "Run authorization file");
+    if (!details.isFile() || details.uid !== hostPrincipalUid
         || (details.mode & 0o022) !== 0) {
         throw new RunAdmissionError("admission_storage_insecure", "Run authorization file must be a regular file owned by the attesting host principal and writable by no one else.");
     }
@@ -274,7 +298,8 @@ async function loadHostLedger(path, hostPrincipalUid) {
         }
         throw new RunAdmissionError("admission_storage_unavailable", "Run admission ledger could not be inspected.");
     }
-    if (!details.isFile() || details.isSymbolicLink() || details.uid !== hostPrincipalUid
+    details = await followHostOwnedLink(path, details, hostPrincipalUid, "Run admission ledger");
+    if (!details.isFile() || details.uid !== hostPrincipalUid
         || (details.mode & 0o022) !== 0) {
         throw new RunAdmissionError("admission_storage_insecure", "Run admission ledger must be a regular file owned by the attesting host principal and writable by no one else.");
     }
@@ -577,7 +602,7 @@ export class RunAdmissionStore {
         });
     }
     async readHostLedger() {
-        await requireHostLedgerDirectory(dirname(this.ledgerFile));
+        await requireHostLedgerDirectory(dirname(this.ledgerFile), this.boundary.hostPrincipalUid);
         return loadHostLedger(this.ledgerFile, this.boundary.hostPrincipalUid);
     }
     /**

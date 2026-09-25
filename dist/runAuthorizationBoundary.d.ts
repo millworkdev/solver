@@ -62,6 +62,24 @@ export interface ResolveRunAuthorizationBoundaryOptions {
     attestationFile?: string;
     environment?: NodeJS.ProcessEnv;
 }
+interface OwnershipFailure {
+    path: string;
+    detail: string;
+}
+/**
+ * True host ownership: the path, and every directory above it, belongs to a
+ * principal this process is not, and no one but that principal may write it.
+ *
+ * There is deliberately no exemption here. An earlier revision let the ledger
+ * directory be group-writable, on the reasoning that group write is how a host
+ * hands the CLI principal its own reservation store. It is also how the CLI
+ * principal deletes or rewrites that store: with group write, the process that
+ * spends the allowance is the process that keeps the record of having spent it,
+ * so one `unlink` — or one plain overwrite — resets the history the next
+ * admission is checked against. Group write on the ledger directory is
+ * therefore no different from no boundary at all.
+ */
+export declare function hostOwnedChainFailure(path: string, uid: number, hostPrincipalUid?: number): Promise<OwnershipFailure | null>;
 export interface ParsedHostAttestation {
     ledgerFile: string;
     recoveryJournalFile: string;
@@ -95,3 +113,4 @@ export declare function unsupportedRunBoundaryReport(resolution: UnsupportedRunB
     attestation_file: string;
     supported_profile: string;
 };
+export {};

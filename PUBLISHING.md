@@ -11,7 +11,7 @@ source contributions.
 
 ## Prepared export
 
-The tree is a prepared export for release version `0.1.18`, generated from
+The tree is a prepared export for release version `0.1.19`, generated from
 the exact reviewed SDK build:
 
 - the closed export contains exactly 92 compiled JavaScript and declaration
@@ -25,8 +25,8 @@ the exact reviewed SDK build:
   aggregate digest formula;
 - package metadata exposes `millwork` at `dist/cli.js` and points `repository`
   at this exact publishing proxy;
-- the version advanced to `0.1.18`; immutable `0.1.0` through `0.1.3`, `0.1.5`,
-  `0.1.6`, `0.1.7`, `0.1.8`, `0.1.9`, `0.1.10`, `0.1.11`, `0.1.12`, `0.1.13`, `0.1.14`, `0.1.15`, `0.1.16` and `0.1.17` are never republished or altered, and `0.1.4` remains unused
+- the version advanced to `0.1.19`; immutable `0.1.0` through `0.1.3`, `0.1.5`,
+  `0.1.6`, `0.1.7`, `0.1.8`, `0.1.9`, `0.1.10`, `0.1.11`, `0.1.12`, `0.1.13`, `0.1.14`, `0.1.15`, `0.1.16`, `0.1.17` and `0.1.18` are never republished or altered, and `0.1.4` remains unused
   because it was reserved by the release drill plan.
 
 Derivation and review evidence are retained privately.
@@ -49,10 +49,10 @@ every pull request and push to `main`:
   closed-world file set must match the committed export manifest.
 - `scripts/check-packed-files.mjs` — the packed file set must equal exactly
   that export plus the three files npm always includes, and the manifest must
-  bind version `0.1.18` and `millwork` to the exported `dist/cli.js`.
+  bind version `0.1.19` and `millwork` to the exported `dist/cli.js`.
 - `scripts/smoke-installed.mjs` — packs the tree, installs the tarball into
   a clean directory on Node 20 and 22, proves the public module imports, runs
-  the installed `millwork` executable, verifies the exact `0.1.18` package and
+  the installed `millwork` executable, verifies the exact `0.1.19` package and
   its current-docs link, and exercises the public docs command without network
   access. The immutable binary does not assert mutable public support status.
 - `scripts/verify-token-absence.sh` + `scripts/test-token-absence-real-npm.sh`
