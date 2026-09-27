@@ -223,6 +223,90 @@ interface ExecutionRequestBase {
     };
     compose?: "auto";
 }
+/** The two supported evidence sources in Review Composer v1. */
+export type ReviewComposerSource = {
+    id: "coderabbit";
+} | {
+    id: "github";
+    checks: Array<{
+        workflow_id: number;
+        job_name: string;
+    }>;
+    minimum_approvals: number;
+};
+/** An additive live-run option. The repository must already be connected to
+ * this organization's Millwork GitHub App installation. */
+export interface ReviewComposerRequest {
+    version: "v1";
+    repository: string;
+    base_ref: string;
+    /** Full commit SHA of the accepted base branch. */
+    base_sha: string;
+    agent_arm_id: string;
+    sources: ReviewComposerSource[];
+    combine: "all" | "any";
+    veto_sources: Array<ReviewComposerSource["id"]>;
+}
+/** Register a private coding agent only after its repository connection has
+ * been verified. The server supplies its private data grant and protocol tag. */
+export interface ReviewComposerAgentRegistration {
+    repository: string;
+    display_name: string;
+    endpoint: ArmEndpoint;
+    max_runtime_s: number;
+}
+export interface ReviewComposerAgentRegistrationOutcome {
+    arm_id: string;
+    status: ArmStatus;
+    status_reason: string | null;
+}
+/** A Review Composer packet records an evidence decision about one commit.
+ * Lifecycle status `completed` means observation finished, not approval:
+ * inspect `verdict` and `action` for the review outcome. Provider usage can
+ * be zero when the adapter cannot read the customer's provider invoice. */
+export interface ReviewComposerDecisionPacket {
+    version: "v1";
+    verdict: "pass" | "block" | "no_verdict";
+    reason: string;
+    action: "gate" | "needs_review";
+    policy_hash: string;
+    connector_versions: {
+        github: "github-app/v1";
+        coderabbit: "github-pr/v1";
+        agent: "async_job_v1";
+    };
+    policy: {
+        combine: "all" | "any";
+        veto_sources: Array<ReviewComposerSource["id"]>;
+        sources: Array<ReviewComposerSource["id"]>;
+    };
+    artifact: {
+        repository: string;
+        base_ref: string;
+        base_sha: string;
+        branch: string;
+        final_sha: string;
+        pr_number: number | null;
+        pr_url: string | null;
+        pr_opened_by?: {
+            github_user_id: number;
+            github_login: string;
+        } | null;
+        [extra: string]: unknown;
+    };
+    sources: Array<{
+        id: ReviewComposerSource["id"];
+        status: "pass" | "block" | "no_verdict";
+        reason: string;
+        evidence_id: string | null;
+        observed_at: string | null;
+        [extra: string]: unknown;
+    }>;
+    decided_at: string;
+    agent_usage_usd: number;
+    platform_fee_usd: number;
+    [extra: string]: unknown;
+}
 /**
  * Live callers may supply a tenant verifier or omit `verifier_id` to select
  * Millwork API's built-in output-presence baseline (not semantic verification).
@@ -235,12 +319,19 @@ export type ExecutionRequest = (ExecutionRequestBase & {
     routing?: {
         required_arm_id: string;
     };
+    review_composer?: never;
+}) | (ExecutionRequestBase & {
+    mode: "live";
+    review_composer: ReviewComposerRequest;
+    verifier_id?: never;
+    routing?: never;
 }) | (ExecutionRequestBase & {
     mode: "echo";
     verifier_id?: never;
     routing?: {
         required_arm_id: string;
     };
+    review_composer?: never;
 });
 export type TenantTemplateId = "starter" | "pooled-open-model" | "byok-open-model";
 export interface TenantTemplatePlan {
@@ -396,6 +487,8 @@ export interface Execution {
     };
     created_at: string;
     cancelled_by: string | null;
+    /** Present only for a Review Composer run after a decision is recorded. */
+    decision_packet?: ReviewComposerDecisionPacket | null;
     [extra: string]: unknown;
 }
 export interface LifecycleEvent {
@@ -412,15 +505,20 @@ export interface LifecycleEvent {
     [extra: string]: unknown;
 }
 /**
- * `usd` records model usage, excluding Millwork's platform fee. Model usage
- * is billed by Millwork or your provider, depending on the saved model.
+ * `usd` records usage reported for the run, excluding Millwork's platform fee.
+ * For Review Composer, an adapter can report zero even when its coding-agent
+ * provider bills the customer separately. For ordinary model runs, usage is
+ * billed by Millwork or the provider, depending on the saved model.
  * `platform_fee_usd` records Millwork's fee after any refund; it is zero for
  * a test run or when Millwork returns the fee because the run failed before
  * any model attempt.
+ * `review_composer_fee_usd` is the Review Composer part of that fee. It is
+ * already included in `platform_fee_usd` and appears only on composer receipts.
  */
 export interface ReceiptTotals {
     usd: number;
     platform_fee_usd: number;
+    review_composer_fee_usd?: number;
     runtime_s: number;
 }
 /**
@@ -534,6 +632,7 @@ export interface Receipt {
     execution_id: string;
     slices?: ReceiptSlice[];
     totals?: ReceiptTotals;
+    decision_packet?: ReviewComposerDecisionPacket | null;
     [extra: string]: unknown;
 }
 export interface ReceiptListFilter {
@@ -1046,6 +1145,7 @@ export interface Account {
         funded_state: "funded" | "sandbox";
         manage_available: boolean;
         platform_fee_usd_per_execution?: number;
+        review_composer_fee_usd_per_execution?: number;
     } | null;
 }
 export {};

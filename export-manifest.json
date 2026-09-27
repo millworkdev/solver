@@ -6,7 +6,7 @@
     "apply the private export recipe's single-line replacement table in order"
   ],
   "aggregate_digest_formula": "sha256 over the sorted lines '<sha256>  ./<path relative to dist>\\n' of every exported file",
-  "file_count": 107,
+  "file_count": 109,
   "files": [
     {
       "path": "dist/cli.d.ts",
@@ -34,11 +34,11 @@
     },
     {
       "path": "dist/client.d.ts",
-      "sha256": "f9bf0a53a8566df71612f63ee973a00e572082132464ac3a4f33ac8e4d349008"
+      "sha256": "e94188dce1b592740938fa7776d99c86eab309e24003c589868867eab7e57a0a"
     },
     {
       "path": "dist/client.js",
-      "sha256": "81b1d43f08d1812a82199a384441683da71931be0807605945795a13155769fd"
+      "sha256": "39aa7283057c0652ac5fdfe0f27e884e2fd4551d017d7beafef5e2dd9558e1d8"
     },
     {
       "path": "dist/cliGuidance.d.ts",
@@ -138,7 +138,7 @@
     },
     {
       "path": "dist/index.d.ts",
-      "sha256": "b8958ede53640138eb0c5a12d3a127068a1aba2b6823b2ab21c063d7092f7042"
+      "sha256": "862d0de6c680a0b0d57fd7a21177880efa8efdb2290d687ee7d006c60b1e574d"
     },
     {
       "path": "dist/index.js",
@@ -309,6 +309,14 @@
       "sha256": "0256e6820d6fa029fef11afb962dd9077aa2a08aa7d8f622512d9519be0c1a6b"
     },
     {
+      "path": "dist/resources/reviewComposerAgents.d.ts",
+      "sha256": "ecf9f6e8df8565cac1bcf88a325877890eed0b96e17bb151110d07222cc38d32"
+    },
+    {
+      "path": "dist/resources/reviewComposerAgents.js",
+      "sha256": "786fd5d8e3c3df383635bdf8fb2fec0b5b7fd3afb858154d9ba6fa3b17fcf205"
+    },
+    {
       "path": "dist/resources/sourceConnections.d.ts",
       "sha256": "86de3832aaa6c7974b7b40fa9d238984512d2c0265813ff15aeed13957eac242"
     },
@@ -362,7 +370,7 @@
     },
     {
       "path": "dist/runAdmission.js",
-      "sha256": "b0fa97659bb4c491caf329f902ee4e388146d4585a87b99dbfe86aa110b47d6b"
+      "sha256": "438f43095e5f927996d7b38b396f6fa09bd8fe5b119cafccb705d2ff2cfb86a2"
     },
     {
       "path": "dist/runAuthorizationBoundary.d.ts",
@@ -414,7 +422,7 @@
     },
     {
       "path": "dist/types.d.ts",
-      "sha256": "8908a8a993726318011090997433b647b6504ff28a21d72731bb24f326ec95f8"
+      "sha256": "54333630fdc0fe4d48d66d5deed2eb9fb7e54606592777d347bd33b4f30a6938"
     },
     {
       "path": "dist/types.js",
@@ -437,5 +445,5 @@
       "sha256": "eba4a7197006215a72303b4b19f092eafd7ce09abd5394801c37ea6093b76f4c"
     }
   ],
-  "aggregate_sha256": "673a246ff66281b65d63d99b8ff4ee5a29145b3089452ddb9f2755ed9f1f5bfe"
+  "aggregate_sha256": "a9b71743f3dbbcd56a687dc59f2e6ef9e5479aae9546a21a576bd681e3cb75f7"
 }

@@ -9,6 +9,7 @@ import { ModelDeploymentsResource } from "./resources/modelDeployments.js";
 import { ModelSourceProfilesResource } from "./resources/modelSourceProfiles.js";
 import { ProposalsResource } from "./resources/proposals.js";
 import { ReceiptsResource } from "./resources/receipts.js";
+import { ReviewComposerAgentsResource } from "./resources/reviewComposerAgents.js";
 import { SourceConnectionsResource } from "./resources/sourceConnections.js";
 import { SourceCredentialHandoffsResource } from "./resources/sourceCredentialHandoffs.js";
 import { UsageResource } from "./resources/usage.js";
@@ -36,6 +37,7 @@ export class Solver {
     apiKeys;
     executions;
     receipts;
+    reviewComposerAgents;
     proposals;
     usage;
     complianceExports;
@@ -55,6 +57,7 @@ export class Solver {
         this.apiKeys = new ApiKeysResource(http);
         this.executions = new ExecutionsResource(http);
         this.receipts = new ReceiptsResource(http);
+        this.reviewComposerAgents = new ReviewComposerAgentsResource(http);
         this.proposals = new ProposalsResource(http);
         this.usage = new UsageResource(http);
         this.complianceExports = new ComplianceExportsResource(http);
