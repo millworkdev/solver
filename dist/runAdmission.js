@@ -37,7 +37,9 @@ function money(value) {
     return Number(value.toFixed(6));
 }
 function verifierIdentity(request) {
-    return request.mode === "echo" ? "platform.echo" : request.verifier_id ?? "platform.output_presence";
+    return request.mode === "echo"
+        ? "platform.echo"
+        : request.review_composer ? "platform.review_composer.v1" : request.verifier_id ?? "platform.output_presence";
 }
 export function previewRunRequest(context) {
     const declaredMaximum = context.platform_fee_usd === null
@@ -52,6 +54,7 @@ export function previewRunRequest(context) {
         access_lane: context.access_lane,
         mode: context.request.mode ?? "live",
         compose: context.request.compose ?? "auto",
+        ...(context.request.review_composer ? { review_composer: context.request.review_composer } : {}),
         policy: context.request.policy,
         model_budget_usd: context.request.policy.budget.max_cost_usd,
         platform_fee_usd: context.platform_fee_usd,
