@@ -1,5 +1,5 @@
 import type { HttpClient } from "../httpClient.js";
-import type { ModelCatalog, ModelDefinitionListing } from "../types.js";
+import type { ModelCatalog, ModelDefinitionListing, TestedByokQuote } from "../types.js";
 /**
  * Curated model discovery. `definitions()` lists publisher-true model
  * identity records (metadata only -- never usable supply by itself);
@@ -11,5 +11,10 @@ export declare class ModelCatalogResource {
     private readonly http;
     constructor(http: HttpClient);
     definitions(): Promise<ModelDefinitionListing>;
+    /** Commercial consent only; the server rechecks route eligibility at admission. */
+    quote(input: {
+        model_deployment_id: string;
+        provider_usage_budget_usd: number;
+    }): Promise<TestedByokQuote>;
     get(): Promise<ModelCatalog>;
 }

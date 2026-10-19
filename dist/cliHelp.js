@@ -9,7 +9,7 @@ import { VERIFIER_COMMANDS, VERIFIER_DOCK_CONTRACT } from "./cliVerifierCapabili
  * more thing: it names the offline command that answers the question properly.
  * The usage line stays exactly what it was for a real usage error.
  */
-export const USAGE_LINE = "usage: millwork <docs|doctor|--version|models list|models use <catalog-model>|models add <catalog-model>|arms disable <arm-id>|run --preset <id> --objective <task>|provider list|provider connect <source-id>|provider rotate <connection-id>|provider disconnect <connection-id>|verifier capabilities|verifier attach --endpoint <url> --auth-ref <handle>|verifier connect --endpoint <url> --access public|managed|verifier init|verifier test --local|verifier list|verifier show|verifier test|verifier <replace|restore|continue|disconnect> --verifier-id <id>|tenant show|tenant start> [options]";
+export const USAGE_LINE = "usage: millwork <account show|balance|fee|usage --period YYYY-MM|receipt <execution-id>|quote <deployment-id> --provider-usage-budget-usd <USD>|allowance|docs|doctor|--version|models list|models use <catalog-model>|models add <catalog-model>|arms disable <arm-id>|run --preset <id> --objective <task>|provider list|provider connect <source-id>|provider rotate <connection-id>|provider disconnect <connection-id>|verifier capabilities|verifier attach --endpoint <url> --auth-ref <handle>|verifier connect --endpoint <url> --access public|managed|verifier init|verifier test --local|verifier list|verifier show|verifier test|verifier <replace|restore|continue|disconnect> --verifier-id <id>|tenant show|tenant start> [options]";
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 export function topLevelHelpText() {
     const offline = VERIFIER_COMMANDS.filter((entry) => entry.network === "none");
@@ -33,6 +33,20 @@ export function topLevelHelpText() {
         "millwork docs            open the documentation",
         "millwork doctor          check this machine's configuration",
         "millwork --version       the installed package version",
+        "",
+        "Customer reads (organization key required; no checkout, terms acceptance or run):",
+        "  millwork account show",
+        "  millwork balance",
+        "  millwork fee",
+        "  millwork usage --period YYYY-MM",
+        "  millwork receipt <execution-id>",
+        "  millwork quote <model-deployment-id> --provider-usage-budget-usd <USD>",
+        "  millwork allowance     template pool allowance, not a price quote",
+        "  Add --json for structured output. These reads are built here; installation availability follows the release.",
+        "",
+        "Tested customer-owned runs check settled credit and fetch the exact price before requesting host approval.",
+        "  The printed retry carries --price-approval-sha256; keep it and the replay key unchanged.",
+        "  The API key can spend. A quote, --yes, or a tool argument cannot replace host approval.",
     ].join("\n");
 }
 /** Resolved before anything that could read a key or reach the network. */

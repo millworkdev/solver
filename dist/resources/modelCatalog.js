@@ -16,6 +16,10 @@ export class ModelCatalogResource {
             path: "model-definitions",
         });
     }
+    /** Commercial consent only; the server rechecks route eligibility at admission. */
+    async quote(input) {
+        return this.http.request({ method: "POST", path: "model-catalog/quote", body: input });
+    }
     async get() {
         return this.http.request({
             method: "GET",

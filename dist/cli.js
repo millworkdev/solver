@@ -7,7 +7,7 @@ import { Solver } from "./client.js";
 import { DEFAULT_API_BASE_URL, resolveDiscoveryCommand, safeBaseUrl } from "./cliDiscovery.js";
 import { cliApiError, safeErrorText } from "./cliGuidance.js";
 import { SolverApiError, SolverApiNetworkError } from "./errors.js";
-import { createRunReplayKey, hostOneRunApprovalRequest, readHostOneRunApproval, previewRunRequest, RunAdmissionError, RunAdmissionStore, } from "./runAdmission.js";
+import { createRunReplayKey, hostOneRunApprovalRequest, readHostOneRunApproval, previewRunRequest, RunAdmissionError, RunAdmissionStore, assertTestedByokFunding, testedByokRunConsent, TestedByokPrecheckError, testedByokPrecheckDocument, } from "./runAdmission.js";
 import { resolveRunAuthorizationBoundary, unsupportedRunBoundaryReport, } from "./runAuthorizationBoundary.js";
 import { claimSetupRecovery, loadSetupRecovery, setupRequestHash, setupRecoveryCommand, SetupRecoveryStorageError } from "./cliSetupRecovery.js";
 import { bootstrapOrganizationKey, bootstrapOrganizationKeyInTerminal, loadStoredOrganizationKey } from "./cliOrganizationKeyBootstrap.js";
@@ -22,6 +22,7 @@ import { resolveProviderLifecycleCommand, runProviderLifecycle, providerLifecycl
 import { runVerifierKit } from "./cliVerifierKit.js";
 import { REMOTE_ACCESS_MODES, resolveVerifierCapabilitiesCommand, verifierCommandFlagSets } from "./cliVerifierCapabilities.js";
 import { resolveTopLevelHelp, USAGE_LINE } from "./cliHelp.js";
+import { resolveCustomerReadCommand, runCustomerReadCommand } from "./cliCustomerReads.js";
 import { runPreviewLines, runResultLines } from "./runResultOutput.js";
 import { ModelAddPolicyError, modelAddOperationKey, normalizeModelAddRequest, } from "./modelAddPolicy.js";
 import { applicationSummary, receiptCostLines, readySetupRecovery, newSetupPlanOutput, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, tenantStartVerificationOnward, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
@@ -77,7 +78,8 @@ function hasFlag(args, name) {
     return args.includes(name);
 }
 function authenticatedCommand(args) {
-    return args[0] === "doctor"
+    return ["account", "balance", "fee", "usage", "receipt", "quote", "allowance"].includes(args[0] ?? "")
+        || args[0] === "doctor"
         || (args[0] === "tenant" && ["start", "show"].includes(args[1] ?? ""))
         || (args[0] === "provider" && ["list", "connect", "rotate", "disconnect"].includes(args[1] ?? ""))
         || (args[0] === "models" && ["list", "use", "add"].includes(args[1] ?? ""))
@@ -1343,11 +1345,12 @@ async function runExecution(solver, args, outputContext = {}) {
     assertCommandFlags(args, 1, new Set(["--json", "--yes"]), new Set([
         "--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
         "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--execution-id",
+        "--price-approval-sha256",
     ]), true);
     const executionId = flagValue(args, "--execution-id");
     if (executionId) {
         const other = ["--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
-            "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--yes"]
+            "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--price-approval-sha256", "--yes"]
             .find(flag => hasFlag(args, flag));
         if (other || args.slice(1).some(value => !value.startsWith("--") && value !== executionId)) {
             throw new InspectionUsageError("Use millwork run --execution-id <id> [--json] by itself; inspection never submits work.");
@@ -1362,7 +1365,7 @@ async function runExecution(solver, args, outputContext = {}) {
     }
     const positional = args.slice(1).filter((value, index, tail) => !value.startsWith("--")
         && (index === 0 || !new Set(["--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
-            "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--execution-id"]).has(tail[index - 1])));
+            "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--execution-id", "--price-approval-sha256"]).has(tail[index - 1])));
     const objective = flagValue(args, "--objective") ?? positional.join(" ");
     if (!objective)
         throw new InspectionUsageError("run requires an objective, for example: millwork run --preset <id> --objective \"Summarize this\"");
@@ -1422,24 +1425,62 @@ async function runExecution(solver, args, outputContext = {}) {
     }
     const [account, catalog, selectedArm] = await Promise.all([solver.account.get(), solver.modelCatalog.get(), solver.arms.get(armId)]);
     const model = catalog.models.find(row => row.deployment.model_deployment_id === selectedArm.model_deployment_id);
-    const fee = account.billing?.platform_fee_usd_per_execution;
+    let fee = account.billing?.platform_fee_usd_per_execution;
     const accessLane = model?.connection.access_lane;
     const providerId = model?.source.source_id;
     if (!model || !providerId || (accessLane !== "byok" && accessLane !== "millwork_pool")) {
         throw new InspectionUsageError("The selected arm's provider and paid access lane are unavailable; no run was admitted.");
     }
-    const request = {
+    let request = {
         task: { objective },
         policy,
         routing: { required_arm_id: armId },
         ...(flagValue(args, "--verifier-id") ? { verifier_id: flagValue(args, "--verifier-id") } : {}),
     };
-    const preview = previewRunRequest({ account_id: account.tenant_id, request, arm_id: armId,
-        provider_id: providerId, access_lane: accessLane, platform_fee_usd: fee ?? null });
+    const admission = new RunAdmissionStore({ boundary });
     const suppliedReplayKey = flagValue(args, "--replay-key") ?? flagValue(args, "--idempotency-key");
+    const suppliedPrice = flagValue(args, "--price-approval-sha256");
+    if (suppliedPrice)
+        request = { ...request, tested_byok: {
+                model_deployment_id: model.deployment.model_deployment_id,
+                provider_usage_budget_usd: policy.budget.max_cost_usd, price_approval_sha256: suppliedPrice
+            } };
+    const recovered = suppliedReplayKey ? await admission.recoverAccepted({
+        context: { account_id: account.tenant_id, request, arm_id: armId,
+            provider_id: providerId, access_lane: accessLane, platform_fee_usd: fee ?? null },
+        replayKey: suppliedReplayKey
+    }) : null;
+    if (recovered)
+        fee = recovered.preview.platform_fee_usd ?? undefined;
+    let quote;
+    if (!recovered && accessLane === "byok" && model.tested_byok_access) {
+        const deploymentId = model.deployment.model_deployment_id;
+        quote = await solver.modelCatalog.quote({ model_deployment_id: deploymentId,
+            provider_usage_budget_usd: policy.budget.max_cost_usd });
+        // Keep an explicit approved hash in the replay identity. Fresh submissions
+        // validate it below; an already accepted execution can still be inspected
+        // after the catalog price changes, without authorizing another submission.
+        const currentConsent = testedByokRunConsent({ ...request, tested_byok: undefined }, deploymentId, quote);
+        request = { ...request, tested_byok: suppliedPrice
+                ? { ...currentConsent, price_approval_sha256: suppliedPrice } : currentConsent };
+        if (fee !== quote.millwork_fee_usd)
+            throw new TestedByokPrecheckError("quote_unavailable", "The account fee and quote disagree. Refresh both before requesting approval.");
+    }
+    else if (!recovered && suppliedPrice) {
+        throw new TestedByokPrecheckError("quote_unavailable", "This saved model no longer has an eligible tested customer-owned quote.");
+    }
+    const precheckFunding = () => {
+        if (quote) {
+            testedByokRunConsent(request, model.deployment.model_deployment_id, quote);
+            assertTestedByokFunding(account, quote.millwork_fee_usd);
+        }
+    };
+    const recoveryArgs = quote && !suppliedPrice ? [...args, "--price-approval-sha256", quote.price_approval_sha256] : args;
+    const preview = recovered?.preview ?? previewRunRequest({ account_id: account.tenant_id, request, arm_id: armId,
+        provider_id: providerId, access_lane: accessLane, platform_fee_usd: fee ?? null });
     const submissionIntent = suppliedReplayKey ? "recover_same_run" : "new_run";
     const replayKey = suppliedReplayKey ?? createRunReplayKey(preview);
-    const command = replayCommand(args, replayKey);
+    const command = replayCommand(recoveryArgs, replayKey);
     const costReview = { model_key: model.model.model_key, arm_id: armId,
         source_id: model.source.source_id, access_lane: model.connection.access_lane,
         data_classes: [...policy.data_classes], max_runtime_s: policy.budget.max_runtime_s,
@@ -1447,17 +1488,20 @@ async function runExecution(solver, args, outputContext = {}) {
         model_budget_usd: policy.budget.max_cost_usd,
         model_usage_payer: model.connection.access_lane === "byok" ? "customer_provider_account" : "millwork_credit",
         combined_allowance_usd: preview.declared_maximum_usd,
-        budget_note: "Model budget is a stop threshold, not a final quote; an in-flight call can exceed it." };
+        budget_note: "Model budget is a stop threshold, not a final quote; an in-flight call can exceed it.",
+        ...(quote ? { tested_byok_quote: quote,
+            spending_authority: "This API key can spend using its existing tested customer-owned authority. The quote grants no new authority; host run approval is still required." } : {}) };
     if (interactive)
         process.stderr.write(`${runPreviewLines(request).map(line => `${terminalText(line)}\n`).join("")}Model: ${terminalText(costReview.model_key)}\nProvider: ${terminalText(providerId)}\nLane: ${terminalText(accessLane)}\nData classes: ${costReview.data_classes.map(value => terminalText(value)).join(", ")}\nRuntime limit: ${costReview.max_runtime_s}s\nMillwork platform fee: ${fee === undefined ? "unavailable; review Billing" : `USD ${fee}`}\nModel usage budget: USD ${costReview.model_budget_usd} (${costReview.model_usage_payer})\nCombined allowance: ${costReview.combined_allowance_usd === null ? "unavailable" : `USD ${costReview.combined_allowance_usd}`}\n${costReview.budget_note}\nRequest hash: ${terminalText(preview.request_hash)}\nReplay key: ${terminalText(replayKey)}${suppliedReplayKey ? "" : " (generated for this new-run request)"}\n`);
     else
         process.stderr.write(suppliedReplayKey
             ? `Replay key before submission: ${replayKey}\n`
             : `New-run replay key before submission: ${replayKey} (generated because no replay key was supplied).\n`);
-    const admission = new RunAdmissionStore({ boundary });
+    if (interactive && quote)
+        process.stderr.write(`Provider price basis: ${terminalText(quote.pricing_basis)}\nPrice revision: ${terminalText(quote.pricing_revision)}\nPrice approval hash: ${terminalText(quote.price_approval_sha256)}\nThis API key can spend on its existing tested customer-owned authority. A quote does not replace host approval.\n`);
     let grant;
     try {
-        grant = await admission.admit({ preview, replayKey });
+        grant = recovered?.grant ?? await admission.admit({ preview, replayKey, beforeNewReservation: precheckFunding });
     }
     catch (error) {
         if (error instanceof RunAdmissionError && error.code === "charge_estimate_unavailable") {
@@ -1478,8 +1522,18 @@ async function runExecution(solver, args, outputContext = {}) {
         // Whether a person is watching this terminal is not evidence about who is
         // typing in it, so nothing here asks. The host answers, in a place this
         // process cannot write, or the run does not happen.
-        const approval = await readHostOneRunApproval(boundary, preview, replayKey);
+        let approval;
+        try {
+            approval = await readHostOneRunApproval(boundary, preview, replayKey);
+        }
+        catch (approvalError) {
+            if (approvalError instanceof RunAdmissionError && approvalError.code === "approval_request_mismatch" && quote) {
+                testedByokRunConsent(request, model.deployment.model_deployment_id, quote);
+            }
+            throw approvalError;
+        }
         if (!approval) {
+            precheckFunding();
             const requested = hostOneRunApprovalRequest(boundary, preview, replayKey);
             if (interactive) {
                 process.stderr.write(requested.approval_file === null
@@ -1507,7 +1561,7 @@ async function runExecution(solver, args, outputContext = {}) {
             process.exitCode = 2;
             return;
         }
-        grant = await admission.admit({ preview, replayKey, oneRunApproval: approval });
+        grant = await admission.admit({ preview, replayKey, oneRunApproval: approval, beforeNewReservation: precheckFunding });
     }
     let execution;
     if (grant.action === "inspect" && grant.execution_id) {
@@ -1519,12 +1573,15 @@ async function runExecution(solver, args, outputContext = {}) {
             await admission.markAccepted(grant, execution.execution_id);
         }
         catch (error) {
-            if (error instanceof SolverApiError && grant.action === "submit" && suppliedReplayKey === undefined
+            // A printed approval retry already carries a replay key, but admission
+            // can still reserve it for the first submission. Only an existing
+            // reservation has an earlier outcome that this refusal cannot resolve.
+            if (error instanceof SolverApiError && grant.action === "submit"
                 && provesNoExecutionWasAccepted(error)) {
                 await admission.releaseAfterAuthoritativeRefusal(grant, `HTTP ${error.status}: ${error.message}`);
                 throw error;
             }
-            emitRunRecovery(args, grant, preview, error, outputContext);
+            emitRunRecovery(recoveryArgs, grant, preview, error, outputContext);
             return;
         }
     }
@@ -1533,7 +1590,7 @@ async function runExecution(solver, args, outputContext = {}) {
         current = await waitForExecution(solver, execution, policy.budget.max_runtime_s);
     }
     catch (error) {
-        emitRunRecovery(args, grant, preview, error, outputContext);
+        emitRunRecovery(recoveryArgs, grant, preview, error, outputContext);
         return;
     }
     const result = current.status === "completed" ? await solver.executions.result(current.execution_id) : null;
@@ -1627,7 +1684,20 @@ async function main() {
             throw new InspectionUsageError(`Use tenant start --new-setup${conflicting ? ` without ${conflicting}` : ""}. It requests a fresh plan; use the returned request key and approval command to apply or retry it.`);
         }
     }
+    const customerRead = resolveCustomerReadCommand(args);
     await prepareOrganizationKey(args, tenantStart);
+    if (customerRead) {
+        const missing = qualifyMissingCredential({ apiKey: process.env.SOLVERAPI_API_KEY });
+        if (missing) {
+            emitQualification(missing);
+            return;
+        }
+        const solver = new Solver({ apiKey: process.env.SOLVERAPI_API_KEY, baseUrl: process.env.SOLVERAPI_BASE_URL ?? DEFAULT_API_BASE_URL,
+            maxRetries: 0, fetchImpl: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }) });
+        const result = await runCustomerReadCommand(customerRead, solver);
+        process.stdout.write(interactive ? result.human : `${JSON.stringify(result.document, null, 2)}\n`);
+        return;
+    }
     const discovery = resolveDiscoveryCommand(args);
     if (discovery) {
         process[discovery.stream].write(`${discovery.text}\n`);
@@ -1938,6 +2008,17 @@ async function main() {
     }
 }
 main().catch((error) => {
+    if (error instanceof TestedByokPrecheckError || (error instanceof SolverApiError && error.reason === "price_changed")) {
+        const refusal = error instanceof TestedByokPrecheckError ? error
+            : new TestedByokPrecheckError("price_changed", error.detail ?? "The approved route or price changed. Review a fresh quote.");
+        const document = testedByokPrecheckDocument(refusal);
+        if (interactive)
+            process.stderr.write(`${document.detail}\n${document.next_action.detail}\n`);
+        else
+            emitJson({ operation: "run", ...document });
+        process.exitCode = 2;
+        return;
+    }
     if (setupRecoveryRecord) {
         emitRecoveryFailure(error, qualificationFromApiError(error) ?? undefined);
         return;
