@@ -14,6 +14,7 @@ export interface ProblemBody {
     instance: string;
     errors?: FieldError[];
     retry_after_s?: number;
+    reason?: "agreement_terminated" | "agreement_recovery_required" | "price_changed";
 }
 /**
  * Thrown for every non-2xx response. Carries the parsed Problem body
@@ -27,6 +28,7 @@ export declare class SolverApiError extends Error {
     readonly instance: string;
     readonly errors?: FieldError[];
     readonly retryAfterS?: number;
+    readonly reason?: ProblemBody["reason"];
     constructor(problem: ProblemBody);
 }
 /**

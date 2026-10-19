@@ -13,11 +13,13 @@ export interface SolverClientOptions {
     fetchImpl?: typeof fetch;
 }
 export interface RequestOptions {
-    method: "GET" | "HEAD" | "POST" | "PATCH" | "DELETE";
+    method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
     path: string;
     query?: Record<string, string | number | undefined>;
     body?: unknown;
     idempotencyKey?: string;
+    /** Caller-owned feed revision; never refreshed or retried automatically. */
+    ifMatch?: string;
 }
 /**
  * Which side of the safe-transport boundary a request sits on.

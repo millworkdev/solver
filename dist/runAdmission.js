@@ -11,6 +11,79 @@ const ORPHAN_LOCK_STALE_MS = 5 * 60_000;
 const LOCK_OWNER_FILE = "owner.json";
 const ONE_RUN_APPROVAL_BRAND = Symbol("millwork.host-issued-one-run-approval");
 const ONE_RUN_APPROVAL_SCHEMA = "millwork.one-run-approval/v1";
+/** Shared by CLI and MCP; none of these codes grants spending authority. */
+export const testedByokPrecheckCodes = [
+    "insufficient_credit", "payment_unavailable", "billing_unavailable", "quote_unavailable", "price_changed",
+];
+export class TestedByokPrecheckError extends Error {
+    code;
+    constructor(code, message) {
+        super(message);
+        this.code = code;
+        this.name = "TestedByokPrecheckError";
+    }
+}
+export function testedByokPrecheckDocument(error) {
+    const billing = error.code === "insufficient_credit" || error.code === "billing_unavailable"
+        || error.code === "payment_unavailable";
+    return { state: "action_required", refusal_code: error.code, detail: error.message,
+        next_action: { type: billing ? "review_billing" : "review_quote",
+            detail: billing ? "Open Billing, confirm settled credit, then retry the same request. A tool cannot top up or authorize spending."
+                : "Read the current tested customer-owned quote and obtain a fresh host approval for its exact price and request." } };
+}
+function exactMicrousd(value) {
+    if (typeof value !== "number" || !Number.isFinite(value))
+        return null;
+    const scaled = value * 1_000_000;
+    const rounded = Math.round(scaled);
+    const tolerance = Math.max(1, Math.abs(scaled)) * Number.EPSILON * 2;
+    return Number.isSafeInteger(rounded) && Math.abs(scaled - rounded) <= tolerance ? rounded : null;
+}
+/** A refusal only: read the settled balance before requesting a new approval. */
+export function assertTestedByokFunding(account, feeUsd) {
+    const reason = account.billing?.payment_unavailable_reason;
+    // Checkout setup is not spending authority. Existing settled credit can pay
+    // a run even when a new top-up cannot be created; explicit spending stops
+    // and unavailable admission evidence still fail closed.
+    if (reason === "wallet_frozen" || reason === "spending_paused" || reason === "admission_unavailable") {
+        throw new TestedByokPrecheckError("payment_unavailable", "Spending is blocked or its availability cannot be verified. Review Billing; no paid run was submitted.");
+    }
+    if (reason != null && !["not_configured", "mode_unverified", "pilot_not_admitted"].includes(reason)) {
+        throw new TestedByokPrecheckError("billing_unavailable", "Billing returned an unknown availability reason. Refresh it before requesting approval.");
+    }
+    const balance = exactMicrousd(account.balance?.balance_usd);
+    const fee = exactMicrousd(feeUsd);
+    if (account.billing == null || balance === null || fee === null || fee < 0) {
+        throw new TestedByokPrecheckError("billing_unavailable", "The settled balance or quoted Millwork fee is unavailable. Refresh Billing before requesting approval.");
+    }
+    if (balance < fee) {
+        throw new TestedByokPrecheckError("insufficient_credit", "The settled balance is below the Millwork fee. Complete a top-up in Billing, then retry; no paid run was submitted.");
+    }
+}
+/** Bind to the server's exact quote; never silently replace an approved price. */
+export function testedByokRunConsent(request, deploymentId, quote) {
+    const budget = exactMicrousd(request.policy.budget.max_cost_usd);
+    const fee = exactMicrousd(quote?.millwork_fee_usd);
+    if (request.mode === "echo" || request.review_composer || request.verifier_id
+        || request.policy.on_eval?.some(action => action !== "gate") || !request.routing?.required_arm_id) {
+        throw new TestedByokPrecheckError("quote_unavailable", "A tested customer-owned run requires one exact saved model, the built-in check, and no fallback or repair.");
+    }
+    if (quote?.schema_version !== "tested-byok-quote/v1" || quote.model_deployment_id !== deploymentId
+        || !/^[a-f0-9]{64}$/.test(quote.price_approval_sha256) || budget === null || budget <= 0
+        || exactMicrousd(quote.provider_usage_budget_usd) !== budget || fee === null || fee < 0
+        || !Number.isSafeInteger(budget + fee) || exactMicrousd(quote.maximum_combined_usd) !== budget + fee
+        || quote.provider_usage_billed_by !== "provider" || quote.provider_invoice_authoritative !== true) {
+        throw new TestedByokPrecheckError("quote_unavailable", "The server did not return a matching tested customer-owned quote. Refresh the selected model and quote.");
+    }
+    const supplied = request.tested_byok;
+    if (supplied && (supplied.model_deployment_id !== deploymentId
+        || supplied.provider_usage_budget_usd !== quote.provider_usage_budget_usd
+        || supplied.price_approval_sha256 !== quote.price_approval_sha256)) {
+        throw new TestedByokPrecheckError("price_changed", "The approved route or price changed. Review the current quote and obtain a fresh host approval.");
+    }
+    return { model_deployment_id: deploymentId, provider_usage_budget_usd: quote.provider_usage_budget_usd,
+        price_approval_sha256: quote.price_approval_sha256 };
+}
 export class RunAdmissionError extends Error {
     code;
     constructor(code, message) {
@@ -55,6 +128,7 @@ export function previewRunRequest(context) {
         mode: context.request.mode ?? "live",
         compose: context.request.compose ?? "auto",
         ...(context.request.review_composer ? { review_composer: context.request.review_composer } : {}),
+        ...(context.request.tested_byok ? { tested_byok: { ...context.request.tested_byok } } : {}),
         policy: context.request.policy,
         model_budget_usd: context.request.policy.budget.max_cost_usd,
         platform_fee_usd: context.platform_fee_usd,
@@ -456,6 +530,48 @@ export class RunAdmissionStore {
         this.journalFile = options.boundary.recoveryJournalFile;
         this.now = options.now ?? (() => new Date());
     }
+    /** Recover only a recorded execution. The caller-owned amount is a hint for
+     * rebuilding the original hash, never authority: the exact request/key must
+     * still match the host approval and its read-only ledger. This path cannot
+     * reserve or submit work, even if a journal row is forged or changes later. */
+    async recoverAccepted(input) {
+        if (!input.replayKey.trim())
+            return null;
+        const candidate = (await loadRecoveryJournal(this.journalFile)).reservations[input.replayKey];
+        if (!candidate || (candidate.state !== "accepted" && candidate.state !== "settled") || !candidate.execution_id)
+            return null;
+        return withRecoveryJournal(this.journalFile, this.now, async (journal) => {
+            const existing = journal.reservations[input.replayKey];
+            if (!existing || (existing.state !== "accepted" && existing.state !== "settled")
+                || typeof existing.execution_id !== "string" || !existing.execution_id)
+                return null;
+            const maximum = existing.declared_maximum_usd;
+            if (typeof maximum !== "number" || !Number.isFinite(maximum)
+                || maximum < input.context.request.policy.budget.max_cost_usd) {
+                throw new RunAdmissionError("replay_request_mismatch", "The recorded accepted maximum cannot bind this request.");
+            }
+            const preview = previewRunRequest({ ...input.context,
+                platform_fee_usd: money(maximum - input.context.request.policy.budget.max_cost_usd) });
+            if (preview.request_hash !== existing.request_hash || preview.declared_maximum_usd !== maximum) {
+                throw new RunAdmissionError("replay_request_mismatch", "Use the exact original approved request with this replay key.");
+            }
+            const approval = await readHostOneRunApproval(this.boundary, preview, input.replayKey, this.now);
+            if (!approval)
+                throw new RunAdmissionError("missing_authorization", "Accepted recovery still requires the host's exact request approval.");
+            const authority = await this.establishAuthority(preview, input.replayKey, approval);
+            const hostRecord = (await this.readHostLedger()).reservations[input.replayKey];
+            if (hostRecord && hostRecord.request_hash !== preview.request_hash) {
+                throw new RunAdmissionError("replay_request_mismatch", "The host recorded a different request under this replay key.");
+            }
+            if (hostRecord?.state === "released") {
+                throw new RunAdmissionError("replay_closed", "The host closed this replay; recovery cannot override it.");
+            }
+            return { preview, grant: { action: "inspect", replay_key: input.replayKey,
+                    request_hash: preview.request_hash, authorization_kind: authority.kind,
+                    authorization_id: authority.authorization_id, declared_maximum_usd: maximum,
+                    execution_id: existing.execution_id } };
+        });
+    }
     /**
      * Admission answers two separate questions in a fixed order, and the order
      * is the security property.
@@ -525,6 +641,7 @@ export class RunAdmissionStore {
             if (input.preview.declared_maximum_usd === null) {
                 throw new RunAdmissionError("charge_estimate_unavailable", "A paid run requires a known declared maximum before customer authorization.");
             }
+            input.beforeNewReservation?.();
             const timestamp = this.now().toISOString();
             journal.reservations[input.replayKey] = {
                 request_hash: input.preview.request_hash,

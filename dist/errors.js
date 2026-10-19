@@ -10,6 +10,7 @@ export class SolverApiError extends Error {
     instance;
     errors;
     retryAfterS;
+    reason;
     constructor(problem) {
         super(problem.title);
         this.name = "SolverApiError";
@@ -19,6 +20,7 @@ export class SolverApiError extends Error {
         this.instance = problem.instance;
         this.errors = problem.errors;
         this.retryAfterS = problem.retry_after_s;
+        this.reason = problem.reason;
     }
 }
 /**

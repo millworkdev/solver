@@ -13,6 +13,7 @@ const UNAVAILABLE_REASONS = {
 const NO_EVALUATION_REASONS = {
     cancelled: "The run was cancelled before evaluation.",
     no_eligible_arms: "No eligible model was available for this slice.",
+    managed_pool_prior_outcome_unknown: "A managed pool call may already have started. Its outcome and billed usage are unconfirmed. Contact Millwork before starting another run; this run will not make another provider call.",
     arm_not_ready: "The selected model was not ready.",
     runtime_exceeded: "The run reached its runtime limit before evaluation.",
     cost_budget_exhausted: "The run reached its model-usage budget before evaluation.",

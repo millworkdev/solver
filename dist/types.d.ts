@@ -28,6 +28,7 @@ export interface Arm {
     display_name: string;
     status: ArmStatus;
     model_lifecycle?: ModelLifecycle;
+    route_availability?: RouteAvailability;
     capability_tags: string[];
     data_class_grants: DataClass[];
     cost_class?: CostClass;
@@ -315,6 +316,11 @@ export interface ReviewComposerDecisionPacket {
  */
 export type ExecutionRequest = (ExecutionRequestBase & {
     mode?: "live";
+    tested_byok?: {
+        model_deployment_id: string;
+        provider_usage_budget_usd: number;
+        price_approval_sha256: string;
+    };
     verifier_id?: string;
     routing?: {
         required_arm_id: string;
@@ -325,6 +331,7 @@ export type ExecutionRequest = (ExecutionRequestBase & {
     review_composer: ReviewComposerRequest;
     verifier_id?: never;
     routing?: never;
+    tested_byok?: never;
 }) | (ExecutionRequestBase & {
     mode: "echo";
     verifier_id?: never;
@@ -332,6 +339,7 @@ export type ExecutionRequest = (ExecutionRequestBase & {
         required_arm_id: string;
     };
     review_composer?: never;
+    tested_byok?: never;
 });
 export type TenantTemplateId = "starter" | "pooled-open-model" | "byok-open-model";
 export interface TenantTemplatePlan {
@@ -492,6 +500,7 @@ export interface Execution {
     [extra: string]: unknown;
 }
 export interface LifecycleEvent {
+    candidate_skipped?: ReceiptCandidateSkip;
     verification_check?: VerificationCheck;
     recorded_check?: ReceiptRecordedCheck;
     event_id: string;
@@ -548,6 +557,12 @@ export interface ReceiptSliceVerifier {
     correctness_declaration?: ReceiptCorrectnessDeclaration;
     [extra: string]: unknown;
 }
+export interface ReceiptCandidateSkip {
+    arm_id: string;
+    attempt: number;
+    candidate_index: number;
+    reason: "arm_not_ready" | "tested_byok_prior_outcome_unknown" | "tested_byok_route_unavailable" | "tested_byok_quote_changed" | "tested_byok_bound_unavailable" | "tested_byok_budget_exceeded" | "managed_pool_consent_mismatch" | "managed_pool_runtime_unavailable" | "managed_pool_quote_unavailable" | "managed_pool_dispatch_not_admitted" | "route_suspended" | "continuity_prior_attempt_outcome_unknown" | "continuity_not_admitted" | "source_not_admitted" | "runtime_exceeded" | "cost_budget_exhausted" | "verifier_unavailable" | "verifier_binding_changed";
+}
 export interface ReceiptSlice {
     slice_id: string;
     capability: string;
@@ -555,6 +570,7 @@ export interface ReceiptSlice {
     verification_checks?: VerificationCheck[];
     recorded_check?: ReceiptRecordedCheck;
     acted_on_eval?: ReceiptActedOnEval;
+    skipped_candidates?: ReceiptCandidateSkip[];
     [extra: string]: unknown;
 }
 export interface ReceiptActedOnEval {
@@ -628,7 +644,43 @@ export type ReceiptRecordedCheck = ({
     /** When this fact was recorded, rather than when the receipt was retrieved. */
     recorded_at: string;
 };
-export interface Receipt {
+export interface ReceiptFeeCharges {
+    currency: "USD";
+    debited_microusd: number;
+    reversed_microusd: number;
+    net_microusd: number;
+    /** Spendable balance at the last recorded fee operation, not a later account read. */
+    balance_after_microusd: number | null;
+    balance_recorded_at: string | null;
+}
+export interface ReceiptAcceptedCharge {
+    request_id: string;
+    quote_id: string;
+    quote_sha256: string;
+    tariff: {
+        id: string;
+        revision: string;
+        sha256: string;
+    };
+    terms: {
+        version_id: string;
+        source_sha256: string;
+    };
+    mode: "test";
+    currency: "USD";
+    usage: {
+        input_tokens: number | null;
+        output_tokens: number | null;
+    };
+    provider_cost_microusd: number | null;
+    fee_microusd: number;
+    total_microusd: number | null;
+}
+export interface ReceiptChargeDetails {
+    fee_charges?: ReceiptFeeCharges;
+    accepted_charge?: ReceiptAcceptedCharge;
+}
+export interface Receipt extends ReceiptChargeDetails {
     execution_id: string;
     slices?: ReceiptSlice[];
     totals?: ReceiptTotals;
@@ -701,13 +753,13 @@ export interface Usage {
         }>;
     }>;
 }
-export type ComplianceDecisionKind = "proposal_decision" | "execution_cancellation" | "api_key_revocation" | "registry_action";
+export type ComplianceDecisionKind = "proposal_decision" | "execution_cancellation" | "api_key_revocation" | "scoped_key_revocation" | "registry_action";
 export interface ComplianceDecisionLogEntry {
     decision_id: string;
     kind: ComplianceDecisionKind;
     action: string;
     resource: {
-        type: "proposal" | "execution" | "api_key" | "arm" | "verifier";
+        type: "proposal" | "execution" | "api_key" | "provider_scoped_key" | "arm" | "verifier";
         id: string;
     };
     acted_by: string | null;
@@ -852,6 +904,14 @@ export interface ModelDeployment {
 }
 export type SourceKind = "publisher_direct" | "gateway" | "cloud" | "fixture";
 export type ModelLifecycle = "preview" | "active" | "deprecated" | "retired";
+/** Present on a deployment-bound model arm only when its route is not plainly available. */
+export interface RouteAvailability {
+    status: "suspended" | "expired" | "retired" | "quarantined" | "deprecated";
+    reason: "operator_suspended" | "absent_from_feed" | "not_ready" | "claim_expired" | "t2_expired" | "domain_expired" | "drift" | "provider_deprecated";
+    since: string;
+    /** The provider-declared deprecation date; null for every other status. */
+    until: string | null;
+}
 export interface ModelDefinition {
     model_key: string;
     publisher_id: string;
@@ -914,6 +974,11 @@ export interface ModelAttemptProvenance {
         release: string;
         served_variant_id: string;
         upstream_ref: string;
+        /**
+         * Gateway sources only, when the certified offering records one: how the
+         * upstream provider is pinned. Omitted for every other source.
+         */
+        resolution_evidence_ref?: string;
     };
     source: {
         source_id: string;
@@ -938,7 +1003,40 @@ export interface ModelAttemptProvenance {
         attestation: "source_response" | "gateway_response";
     } | null;
 }
+export interface TestedByokCommercialTerms {
+    pricing_revision: string;
+    millwork_fee_usd: number;
+    provider_usage_billed_by: "provider";
+    provider_invoice_authoritative: true;
+    support_owner: {
+        provider: "provider_account_credentials_usage_and_model_behavior";
+        millwork: "governed_service_and_millwork_fee";
+    };
+}
+export interface TestedByokQuote extends TestedByokCommercialTerms {
+    schema_version: "tested-byok-quote/v1";
+    model_deployment_id: string;
+    identity: {
+        source_id: string;
+        served_variant_id: string;
+        protocol_profile: SourceProtocolProfile;
+        auth_scheme: SourceAuthScheme;
+        location: string;
+        route: string;
+    };
+    pricing_basis: "source_reported" | "estimated";
+    provider_usage_budget_usd: number;
+    maximum_combined_usd: number;
+    price_approval_sha256: string;
+    fee_policy: {
+        charged_when: "accepted";
+        customer_cancel: "retained";
+        eligible_platform_failure_before_any_attempt: "automatically_reversed";
+        failure_after_attempt_started: "retained";
+    };
+}
 export interface ModelCatalogEntry {
+    tested_byok_access?: TestedByokCommercialTerms;
     model: ModelDefinition;
     source: {
         source_id: string;
@@ -974,6 +1072,7 @@ export interface ModelCatalogEntry {
     };
 }
 export interface ModelCatalog {
+    tested_byok_access?: TestedByokCommercialTerms;
     catalog_policy: "curated_tested_connection_filtered";
     models: ModelCatalogEntry[];
 }
@@ -1144,6 +1243,8 @@ export interface Account {
     billing: {
         funded_state: "funded" | "sandbox";
         manage_available: boolean;
+        checkout_available?: boolean;
+        payment_unavailable_reason?: "not_configured" | "mode_unverified" | "pilot_not_admitted" | "admission_unavailable" | "spending_paused" | "wallet_frozen" | null;
         platform_fee_usd_per_execution?: number;
         review_composer_fee_usd_per_execution?: number;
     } | null;

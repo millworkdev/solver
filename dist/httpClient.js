@@ -66,6 +66,8 @@ export class HttpClient {
             headers["content-type"] = "application/json";
         if (opts.idempotencyKey !== undefined)
             headers["idempotency-key"] = opts.idempotencyKey;
+        if (opts.ifMatch !== undefined)
+            headers["if-match"] = opts.ifMatch;
         // Decided once, before the first attempt, from the request as the caller
         // wrote it. The headers and serialized body below are likewise built once
         // and reused, so a retry is a byte-identical replay -- a retry that changed

@@ -1,8 +1,40 @@
 import { type RunAuthorizationBoundary } from "./runAuthorizationBoundary.js";
-import type { DataClass, ExecutionRequest } from "./types.js";
+import type { DataClass, ExecutionRequest, TestedByokQuote } from "./types.js";
 declare const ONE_RUN_APPROVAL_BRAND: unique symbol;
 declare const ONE_RUN_APPROVAL_SCHEMA = "millwork.one-run-approval/v1";
 export type RunAccessLane = "byok" | "millwork_pool";
+/** Shared by CLI and MCP; none of these codes grants spending authority. */
+export declare const testedByokPrecheckCodes: readonly ["insufficient_credit", "payment_unavailable", "billing_unavailable", "quote_unavailable", "price_changed"];
+export type TestedByokPrecheckCode = typeof testedByokPrecheckCodes[number];
+export declare class TestedByokPrecheckError extends Error {
+    readonly code: TestedByokPrecheckCode;
+    constructor(code: TestedByokPrecheckCode, message: string);
+}
+export declare function testedByokPrecheckDocument(error: TestedByokPrecheckError): {
+    state: string;
+    refusal_code: "price_changed" | "insufficient_credit" | "payment_unavailable" | "billing_unavailable" | "quote_unavailable";
+    detail: string;
+    next_action: {
+        type: string;
+        detail: string;
+    };
+};
+export interface TestedByokFundingAccount {
+    balance?: {
+        balance_usd?: unknown;
+    } | null;
+    billing?: {
+        payment_unavailable_reason?: unknown;
+    } | null;
+}
+/** A refusal only: read the settled balance before requesting a new approval. */
+export declare function assertTestedByokFunding(account: TestedByokFundingAccount, feeUsd: unknown): void;
+/** Bind to the server's exact quote; never silently replace an approved price. */
+export declare function testedByokRunConsent(request: ExecutionRequest, deploymentId: string, quote: TestedByokQuote): {
+    model_deployment_id: string;
+    provider_usage_budget_usd: number;
+    price_approval_sha256: string;
+};
 export interface RunAdmissionContext {
     account_id: string;
     request: ExecutionRequest;
@@ -23,6 +55,11 @@ export interface RunRequestPreview {
     model_budget_usd: number;
     platform_fee_usd: number | null;
     declared_maximum_usd: number | null;
+    tested_byok?: {
+        model_deployment_id: string;
+        provider_usage_budget_usd: number;
+        price_approval_sha256: string;
+    };
 }
 export interface StandingRunAuthorization {
     authorization_id: string;
@@ -111,6 +148,17 @@ export declare class RunAdmissionStore {
     private readonly journalFile;
     private readonly now;
     constructor(options: RunAdmissionStoreOptions);
+    /** Recover only a recorded execution. The caller-owned amount is a hint for
+     * rebuilding the original hash, never authority: the exact request/key must
+     * still match the host approval and its read-only ledger. This path cannot
+     * reserve or submit work, even if a journal row is forged or changes later. */
+    recoverAccepted(input: {
+        context: RunAdmissionContext;
+        replayKey: string;
+    }): Promise<{
+        preview: RunRequestPreview;
+        grant: RunAdmissionGrant;
+    } | null>;
     /**
      * Admission answers two separate questions in a fixed order, and the order
      * is the security property.
@@ -129,6 +177,8 @@ export declare class RunAdmissionStore {
         preview: RunRequestPreview;
         replayKey: string;
         oneRunApproval?: OneRunApproval;
+        /** May only narrow new submissions; accepted/unknown outcomes stay recoverable. */
+        beforeNewReservation?: () => void;
     }): Promise<RunAdmissionGrant>;
     markAccepted(grant: RunAdmissionGrant, executionId: string): Promise<void>;
     settle(grant: RunAdmissionGrant, chargedUsd: number): Promise<void>;
