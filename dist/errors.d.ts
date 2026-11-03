@@ -15,6 +15,8 @@ export interface ProblemBody {
     errors?: FieldError[];
     retry_after_s?: number;
     reason?: "agreement_terminated" | "agreement_recovery_required" | "price_changed";
+    /** Additive server recovery fields, including future codes, remain available. */
+    [extension: string]: unknown;
 }
 /**
  * Thrown for every non-2xx response. Carries the parsed Problem body
@@ -22,6 +24,7 @@ export interface ProblemBody {
  * per the SDK documentation's Errors section.
  */
 export declare class SolverApiError extends Error {
+    readonly problem: ProblemBody;
     readonly type: string;
     readonly status: number;
     readonly detail?: string;

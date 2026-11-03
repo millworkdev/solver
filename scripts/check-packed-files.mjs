@@ -31,11 +31,16 @@ if (JSON.stringify(packedFiles) !== JSON.stringify(allowedPackedFiles)) {
 // publication candidate. Whether that version exists on the registry, and
 // which tag points at it, is a separate fact established by a registry
 // observation, not by this check.
-const CANDIDATE_VERSION = "0.1.21";
 const manifest = JSON.parse(readFileSync(resolve(repositoryRoot, "package.json"), "utf8"));
 if (manifest.name !== "@millwork/solver") failures.push(`manifest name is ${manifest.name}`);
-if (manifest.version !== CANDIDATE_VERSION) {
-  failures.push(`candidate version must be ${CANDIDATE_VERSION}, got ${manifest.version}`);
+if (!/^\d+\.\d+\.\d+$/.test(manifest.version) || packOutput[0].version !== manifest.version) {
+  failures.push(`packed candidate version disagrees with package.json: ${packOutput[0].version}`);
+}
+if (JSON.stringify(manifest.exports?.["./provider"]) !== JSON.stringify({ types: "./dist/provider/index.d.ts", import: "./dist/provider/index.js" })
+  || manifest.imports?.["#provider-feed-validator"] !== "./dist/provider-validator/providerValidator.js"
+  || manifest.imports?.["#provider-validation-context"] !== "./dist/provider-validator/providerValidationContext.js"
+  || JSON.stringify(manifest.dependencies) !== JSON.stringify({ ajv: "^8.20.0" })) {
+  failures.push("provider export, validator imports or reviewed runtime dependency drifted");
 }
 if (manifest.repository?.url !== "git+https://github.com/millworkdev/solver.git") {
   failures.push(`manifest repository does not name this exact public repository: ${manifest.repository?.url}`);

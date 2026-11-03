@@ -2,12 +2,13 @@
 // module import, and the installed millwork binary's exact artifact identity.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const candidateVersion = JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf8")).version;
 const workDirectory = mkdtempSync(join(tmpdir(), "solver-sdk-smoke-"));
 
 // A customer's machine is not this machine. Every child process below runs with
@@ -57,6 +58,110 @@ try {
   if (!probe.includes("installed surface ok")) fail("module surface probe did not confirm");
 
   const binaryPath = join(workDirectory, "node_modules", ".bin", "millwork");
+  // Installation may fetch the reviewed runtime dependency. Every provider
+  // proof process has no credentials or API origin and actively denies network
+  // I/O. Count attempted requests too: a swallowed network error is not offline.
+  const networkLog = join(workDirectory, "network-attempts.log");
+  const denyNetwork = join(workDirectory, "deny-network.cjs");
+  writeFileSync(denyNetwork, `
+const fs = require("node:fs");
+const deny = () => {
+  fs.appendFileSync(${JSON.stringify(networkLog)}, "attempt\\n");
+  throw new Error("Network is denied for installed artifact verification");
+};
+globalThis.fetch = deny;
+for (const name of ["node:http", "node:https"]) {
+  const transport = require(name); transport.request = deny; transport.get = deny;
+}
+require("node:net").Socket.prototype.connect = deny;
+require("node:dgram").Socket.prototype.send = deny;
+require("node:dns").lookup = deny;
+require("node:module").syncBuiltinESMExports();
+`);
+  const providerEnvironment = { ...cleanEnvironment, NODE_OPTIONS: `--require=${JSON.stringify(denyNetwork)}` };
+  const networkControl = spawnSync("node", ["-e", "fetch('https://app.example').catch(() => {})"], {
+    cwd: userWorkspace, encoding: "utf8", env: providerEnvironment,
+  });
+  if (networkControl.status === 0 || !existsSync(networkLog)) fail("network-denial control did not refuse a request");
+  rmSync(networkLog);
+
+  const offerHelp = spawnSync(binaryPath, ["offer", "--help"], {
+    cwd: userWorkspace, encoding: "utf8", env: providerEnvironment,
+  });
+  if (offerHelp.status !== 0 || offerHelp.stderr !== ""
+    || !offerHelp.stdout.includes("millwork offer check --profile")
+    || !offerHelp.stdout.includes("millwork offer workspace")) {
+    fail(`installed provider help failed: ${offerHelp.stdout}${offerHelp.stderr}`);
+  }
+  const supplierHelp = spawnSync(binaryPath, ["supplier", "--help"], {
+    cwd: userWorkspace, encoding: "utf8", env: providerEnvironment,
+  });
+  if (supplierHelp.status !== 0 || supplierHelp.stderr !== ""
+    || !supplierHelp.stdout.includes("millwork supplier schema")
+    || !supplierHelp.stdout.includes("millwork supplier init --directory")) {
+    fail(`installed supplier help failed: ${supplierHelp.stdout}${supplierHelp.stderr}`);
+  }
+  const supplierSchema = spawnSync(binaryPath, ["supplier", "schema"], {
+    cwd: userWorkspace, encoding: "utf8", env: providerEnvironment,
+  });
+  if (supplierSchema.status !== 0 || supplierSchema.stderr !== "") {
+    fail(`installed supplier schema failed: ${supplierSchema.stdout}${supplierSchema.stderr}`);
+  }
+  const schemas = JSON.parse(supplierSchema.stdout);
+  if (Object.keys(schemas).sort().join(",") !== "feed,incumbent_feed,profile,validation_context"
+    || Object.values(schemas).some(schema => !schema || typeof schema !== "object" || !schema.properties)) {
+    fail("installed supplier schema did not expose the supported offline contracts");
+  }
+  const onlineRefusal = spawnSync(binaryPath, ["offer", "workspace"], {
+    cwd: userWorkspace, encoding: "utf8", env: providerEnvironment,
+  });
+  if (onlineRefusal.status !== 2 || !onlineRefusal.stderr.includes("Online offer commands require")
+    || /ERR_[A-Z_]+|Cannot find/.test(onlineRefusal.stderr)) {
+    fail(`installed online offer did not refuse missing credentials: ${onlineRefusal.stdout}${onlineRefusal.stderr}`);
+  }
+  const sample = spawnSync(binaryPath, ["supplier", "init", "--directory", "provider sample"], {
+    cwd: userWorkspace, encoding: "utf8", env: providerEnvironment,
+  });
+  if (sample.status !== 0 || sample.stderr !== "" || JSON.parse(sample.stdout).fixture_only !== true) {
+    fail(`installed provider sample failed: ${sample.stdout}${sample.stderr}`);
+  }
+  const sampleDirectory = join(userWorkspace, "provider sample");
+  const checkArguments = ["offer", "check", "--profile", join(sampleDirectory, "profile.json"),
+    "--feed", join(sampleDirectory, "feed.json"), "--context", join(sampleDirectory, "context.json"), "--json"];
+  const checked = spawnSync(binaryPath, checkArguments, {
+    cwd: userWorkspace, encoding: "utf8", env: providerEnvironment,
+  });
+  if (checked.status !== 0 || checked.stderr !== "" || JSON.parse(checked.stdout).result !== "validated") {
+    fail(`installed offline provider check failed: ${checked.stdout}${checked.stderr}`);
+  }
+  const providerProbe = join(workDirectory, "provider-probe.mjs");
+  writeFileSync(providerProbe, [
+    'import { readFileSync } from "node:fs";',
+    'import { ProviderClient, checkProviderFeed } from "@millwork/solver/provider";',
+    'if (typeof ProviderClient !== "function") throw new Error("ProviderClient is missing");',
+    `const sample = ${JSON.stringify(sampleDirectory)};`,
+    'const read = name => JSON.parse(readFileSync(`${sample}/${name}.json`, "utf8"));',
+    'const report = checkProviderFeed(read("feed"), { ...read("context"), profile: read("profile") });',
+    'if (report.result !== "validated") throw new Error(JSON.stringify(report));',
+    'console.log("installed provider SDK offline ok");',
+  ].join("\n"));
+  const providerImport = spawnSync("node", [providerProbe], {
+    cwd: userWorkspace, encoding: "utf8", env: providerEnvironment,
+  });
+  if (providerImport.status !== 0 || !providerImport.stdout.includes("installed provider SDK offline ok")) {
+    fail(`installed provider subpath failed: ${providerImport.stdout}${providerImport.stderr}`);
+  }
+  // A failed check has a failing exit status and cannot look like a usable feed.
+  const invalidFeed = JSON.parse(readFileSync(join(sampleDirectory, "feed.json"), "utf8"));
+  invalidFeed.routes[0].model_key = "not-issued/release";
+  writeFileSync(join(sampleDirectory, "feed.json"), JSON.stringify(invalidFeed));
+  const refused = spawnSync(binaryPath, checkArguments, {
+    cwd: userWorkspace, encoding: "utf8", env: providerEnvironment,
+  });
+  if (refused.status !== 2 || JSON.parse(refused.stdout).result !== "nonconformant") {
+    fail(`installed provider check accepted a nonconformant feed: ${refused.stdout}${refused.stderr}`);
+  }
+  if (existsSync(networkLog)) fail("installed provider commands attempted a network request");
   const version = spawnSync(binaryPath, ["--version", "--json"], {
     cwd: workDirectory,
     encoding: "utf8",
@@ -64,7 +169,7 @@ try {
   });
   if (version.status !== 0 || version.stderr !== "") fail(`installed binary failed: ${version.stderr}`);
   const versionRecord = JSON.parse(version.stdout);
-  if (versionRecord.schema_version !== 2 || versionRecord.package_version !== "0.1.21"
+  if (versionRecord.schema_version !== 2 || versionRecord.package_version !== candidateVersion
     || Object.hasOwn(versionRecord, "supported_public_version")
     || Object.hasOwn(versionRecord, "public_cli_available")) {
     fail(`installed binary identity is invalid: ${version.stdout}`);
@@ -211,8 +316,10 @@ try {
     fail(`installed selected recipe did not pass locally: ${selectedLocal.stdout}${selectedLocal.stderr}`);
   }
 
+  if (existsSync(networkLog)) fail("installed offline commands attempted a network request");
   process.stdout.write(
-    "installed smoke ok (module import, millwork binary, exact version, docs, offline help and verifier "
+    "installed provider smoke ok (provider subpath, supplier help and schema, offer help and credential refusal, valid and invalid feed, no key or API origin, network denied, zero requests)\n"
+    + "installed smoke ok (module import, millwork binary, exact version, docs, offline help and verifier "
     + "capabilities with every published recipe written, selected output-check kit in an isolated home "
     + "from a spaced workspace, public and authenticated)\n",
   );
