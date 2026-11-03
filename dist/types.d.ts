@@ -1,3 +1,4 @@
+import type { ByokAuthorityWire, ByokInventoryApproval, ByokInventoryReceipt, ByokReadiness } from "./modelInventory.js";
 /**
  * Wire types for the live Millwork API resources. Field names match the backend's wire casing
  * (snake_case), per the arm API contract and
@@ -34,6 +35,10 @@ export interface Arm {
     cost_class?: CostClass;
     provider?: string;
     model_id?: string;
+    model_deployment_id?: string;
+    route_authority_id?: string;
+    route_authority?: ByokAuthorityWire;
+    inventory_readiness?: ByokReadiness;
     endpoint?: ArmEndpoint;
     lifecycle?: ArmLifecycle;
     artifact_hash?: string;
@@ -51,6 +56,8 @@ export interface ArmWrite {
     credential_ref?: string;
     /** Certified deployment binding used by catalog registration templates. */
     model_deployment_id?: string;
+    /** Exact immutable inventory permission from the server-issued template. */
+    route_authority_id?: string;
     endpoint?: ArmEndpoint;
     lifecycle?: ArmLifecycle;
     artifact?: ArmArtifact;
@@ -314,13 +321,19 @@ export interface ReviewComposerDecisionPacket {
  * Echo is the existing platform-proof wire mode: it requires `mode: "echo"`
  * and the API rejects a caller-supplied verifier for that mode.
  */
-export type ExecutionRequest = (ExecutionRequestBase & {
-    mode?: "live";
+type ModelRunApproval = {
     tested_byok?: {
         model_deployment_id: string;
         provider_usage_budget_usd: number;
         price_approval_sha256: string;
     };
+    byok_inventory?: never;
+} | {
+    tested_byok?: never;
+    byok_inventory: ByokInventoryApproval;
+};
+export type ExecutionRequest = (ExecutionRequestBase & ModelRunApproval & {
+    mode?: "live";
     verifier_id?: string;
     routing?: {
         required_arm_id: string;
@@ -332,6 +345,7 @@ export type ExecutionRequest = (ExecutionRequestBase & {
     verifier_id?: never;
     routing?: never;
     tested_byok?: never;
+    byok_inventory?: never;
 }) | (ExecutionRequestBase & {
     mode: "echo";
     verifier_id?: never;
@@ -340,6 +354,7 @@ export type ExecutionRequest = (ExecutionRequestBase & {
     };
     review_composer?: never;
     tested_byok?: never;
+    byok_inventory?: never;
 });
 export type TenantTemplateId = "starter" | "pooled-open-model" | "byok-open-model";
 export interface TenantTemplatePlan {
@@ -681,6 +696,7 @@ export interface ReceiptChargeDetails {
     accepted_charge?: ReceiptAcceptedCharge;
 }
 export interface Receipt extends ReceiptChargeDetails {
+    byok_inventory?: ByokInventoryReceipt;
     execution_id: string;
     slices?: ReceiptSlice[];
     totals?: ReceiptTotals;
@@ -753,13 +769,13 @@ export interface Usage {
         }>;
     }>;
 }
-export type ComplianceDecisionKind = "proposal_decision" | "execution_cancellation" | "api_key_revocation" | "scoped_key_revocation" | "registry_action";
+export type ComplianceDecisionKind = "proposal_decision" | "execution_cancellation" | "api_key_revocation" | "scoped_key_revocation" | "machine_action_approval" | "registry_action";
 export interface ComplianceDecisionLogEntry {
     decision_id: string;
     kind: ComplianceDecisionKind;
     action: string;
     resource: {
-        type: "proposal" | "execution" | "api_key" | "provider_scoped_key" | "arm" | "verifier";
+        type: "proposal" | "execution" | "api_key" | "provider_scoped_key" | "machine_action_approval" | "arm" | "verifier";
         id: string;
     };
     acted_by: string | null;
@@ -783,6 +799,19 @@ export interface ComplianceExportBundle {
         algorithm: "sha256";
         digest: string;
     };
+    /** Own retained issuance/withdrawal changes in the requested period; omitted when empty. */
+    reserved_model_issuances?: Array<{
+        model_key: string;
+        definition: ModelDefinition;
+        definition_sha256: string;
+        issued_by: string;
+        issued_at: string;
+        reason: string;
+        withdrawn_by: string | null;
+        withdrawn_at: string | null;
+        withdrawal_reason: string | null;
+        tombstoned_at: string | null;
+    }>;
 }
 export type SourceAuthScheme = "api_key" | "oauth2" | "aws_sts_sigv4";
 export type SourceProtocolProfile = "openai_responses" | "openai_chat" | "anthropic_messages" | "gemini_generate_content" | "bedrock_converse";
@@ -907,8 +936,8 @@ export type ModelLifecycle = "preview" | "active" | "deprecated" | "retired";
 /** Present on a deployment-bound model arm only when its route is not plainly available. */
 export interface RouteAvailability {
     status: "suspended" | "expired" | "retired" | "quarantined" | "deprecated";
-    reason: "operator_suspended" | "absent_from_feed" | "not_ready" | "claim_expired" | "t2_expired" | "domain_expired" | "drift" | "provider_deprecated";
-    since: string;
+    reason: "operator_suspended" | "absent_from_feed" | "not_ready" | "claim_expired" | "t2_expired" | "domain_expired" | "drift" | "provider_deprecated" | "authority_expired" | "authority_revoked" | "inventory_not_ready";
+    since: string | null;
     /** The provider-declared deprecation date; null for every other status. */
     until: string | null;
 }

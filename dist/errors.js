@@ -4,6 +4,7 @@
  * per the SDK documentation's Errors section.
  */
 export class SolverApiError extends Error {
+    problem;
     type;
     status;
     detail;
@@ -14,6 +15,7 @@ export class SolverApiError extends Error {
     constructor(problem) {
         super(problem.title);
         this.name = "SolverApiError";
+        this.problem = problem;
         this.type = problem.type;
         this.status = problem.status;
         this.detail = problem.detail;

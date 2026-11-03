@@ -207,9 +207,15 @@ function usdText(value) {
  */
 export function receiptCostLines(receipt) {
     const totals = receipt?.totals;
+    const inventory = receipt?.byok_inventory;
+    const lines = inventory ? [
+        `Inventory outcome: ${inventory.outcome}`,
+        `Provider cost: ${inventory.provider_cost_microusd === null ? "unresolved" : usdText(inventory.provider_cost_microusd / 1_000_000)}`,
+        `Unresolved provider exposure: ${usdText(inventory.unresolved_exposure_microusd / 1_000_000)}`,
+    ] : [];
     if (!totals || typeof totals !== "object")
-        return [];
-    return [`Model usage: ${usdText(totals.usd)}`, `Platform fee: ${usdText(totals.platform_fee_usd)}`];
+        return lines;
+    return [...lines, `${inventory ? "Known model usage" : "Model usage"}: ${usdText(totals.usd)}`, `Platform fee: ${usdText(totals.platform_fee_usd)}`];
 }
 export function applicationSummary(application, extras) {
     const ready = application.state === "ready" && application.result && application.receipt && extras.output && extras.execution_receipt;

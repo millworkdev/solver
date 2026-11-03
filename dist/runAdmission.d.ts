@@ -1,5 +1,6 @@
 import { type RunAuthorizationBoundary } from "./runAuthorizationBoundary.js";
 import type { DataClass, ExecutionRequest, TestedByokQuote } from "./types.js";
+import type { ByokAuthorityWire, ByokInventoryApproval, ByokQuoteWire } from "./modelInventory.js";
 declare const ONE_RUN_APPROVAL_BRAND: unique symbol;
 declare const ONE_RUN_APPROVAL_SCHEMA = "millwork.one-run-approval/v1";
 export type RunAccessLane = "byok" | "millwork_pool";
@@ -35,6 +36,10 @@ export declare function testedByokRunConsent(request: ExecutionRequest, deployme
     provider_usage_budget_usd: number;
     price_approval_sha256: string;
 };
+/** Check the original execute plan and quote; this never plans, renews or grants permission. */
+export declare function inventoryRunConsent(request: ExecutionRequest, authority: ByokAuthorityWire, quote: ByokQuoteWire): ByokInventoryApproval;
+/** A partial cost is not a settled invoice. Unknown exposure keeps the original reservation. */
+export declare function settledReceiptCharge(receipt: unknown): number | null;
 export interface RunAdmissionContext {
     account_id: string;
     request: ExecutionRequest;
@@ -60,6 +65,7 @@ export interface RunRequestPreview {
         provider_usage_budget_usd: number;
         price_approval_sha256: string;
     };
+    byok_inventory?: ByokInventoryApproval;
 }
 export interface StandingRunAuthorization {
     authorization_id: string;
@@ -148,13 +154,16 @@ export declare class RunAdmissionStore {
     private readonly journalFile;
     private readonly now;
     constructor(options: RunAdmissionStoreOptions);
-    /** Recover only a recorded execution. The caller-owned amount is a hint for
-     * rebuilding the original hash, never authority: the exact request/key must
-     * still match the host approval and its read-only ledger. This path cannot
-     * reserve or submit work, even if a journal row is forged or changes later. */
+    /** Recover a recorded execution, or explicitly replay an uncertain original
+     * submission. The caller-owned amount only rebuilds the original hash: exact
+     * current host approval and its read-only ledger remain authoritative. This
+     * method never creates a reservation. A replay must send only the unchanged
+     * request/key; the server still refuses expired inputs if it never accepted. */
     recoverAccepted(input: {
         context: RunAdmissionContext;
         replayKey: string;
+        /** Callers must preserve the original body/key and server expiry checks. */
+        recoverUncertain?: boolean;
     }): Promise<{
         preview: RunRequestPreview;
         grant: RunAdmissionGrant;

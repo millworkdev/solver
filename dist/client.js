@@ -5,6 +5,7 @@ import { ArmsResource } from "./resources/arms.js";
 import { EvalSummaryResource } from "./resources/evalSummary.js";
 import { ExecutionsResource } from "./resources/executions.js";
 import { ModelCatalogResource } from "./resources/modelCatalog.js";
+import { ModelInventoryResource } from "./resources/modelInventory.js";
 import { ModelDeploymentsResource } from "./resources/modelDeployments.js";
 import { ModelSourceProfilesResource } from "./resources/modelSourceProfiles.js";
 import { ProposalsResource } from "./resources/proposals.js";
@@ -29,6 +30,9 @@ import { VerifierConnection } from "./verifierConnection.js";
  * SDK) -> `sourceConnections` (the customer-owned binding) -> `modelDeployments`
  * (certification-backed supply) -> `modelCatalog` (usable intersection) ->
  * `arms.create({ model_deployment_id })` -> `executions` -> `receipts`.
+ * `modelInventory` separately observes account routes, plans exact permission
+ * and returns an authorized registration template; it does not widen the
+ * tested catalog or approve a paid execution.
  */
 export class Solver {
     arms;
@@ -46,6 +50,7 @@ export class Solver {
     sourceConnections;
     modelDeployments;
     modelCatalog;
+    modelInventory;
     account;
     evalSummary;
     tenantTemplates;
@@ -66,6 +71,7 @@ export class Solver {
         this.sourceConnections = new SourceConnectionsResource(http);
         this.modelDeployments = new ModelDeploymentsResource(http);
         this.modelCatalog = new ModelCatalogResource(http);
+        this.modelInventory = new ModelInventoryResource(http);
         this.account = new AccountResource(http);
         this.evalSummary = new EvalSummaryResource(http);
         this.tenantTemplates = new TenantTemplatesResource(http);

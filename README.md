@@ -186,3 +186,37 @@ const tenant = await bootstrapTenant({
 
 See the version history on the
 [npm package page](https://www.npmjs.com/package/@millwork/solver?activeTab=versions).
+
+## Provider tools
+
+The separate `@millwork/solver/provider` entry checks model-route metadata
+without an API key or network. From the directory containing this installed
+package, create and check a local practice feed:
+
+```bash
+npx --no-install millwork supplier init --directory my-provider-feed
+cd my-provider-feed
+npx --no-install millwork offer check --profile profile.json --feed feed.json --context context.json --json
+npx --no-install millwork offer --help
+```
+
+The sample uses a fixture identity. Replace it with your profile and complete
+workspace-issued validation context before submitting. A nonconformant report
+exits with code 2; correct the findings before any submission.
+
+For JavaScript or TypeScript, import `checkProviderFeed` and `ProviderClient`
+from `@millwork/solver/provider`. The offline check accepts the feed and a
+context containing the profile. Online methods include `workspace()`,
+`checkFeedOnline(feed, feedEtag)` and
+`routeLifecycle(routeId, { revision_id, subject_sha256, lifecycle: "deprecated" }, feedEtag)`.
+Read the workspace first and retain its exact feed token with the draft.
+Writes make one attempt; a conflict needs a new read and your explicit
+comparison before another submission.
+
+Online access is by invitation and must be enabled for your organization.
+An owner or admin creates an expiring provider machine key in the browser.
+Use only the permitted scopes and pass its secret privately as
+`MILLWORK_PROVIDER_API_KEY`, with `MILLWORK_PROVIDER_API_URL` including `/v1`.
+A customer execution key cannot replace it. Keep secrets out of command
+arguments, files and logs. The package enables no organization or route.
+See [the provider guide](https://docs.getmillwork.dev/providers/index).

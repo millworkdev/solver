@@ -7,7 +7,7 @@ import { Solver } from "./client.js";
 import { DEFAULT_API_BASE_URL, resolveDiscoveryCommand, safeBaseUrl } from "./cliDiscovery.js";
 import { cliApiError, safeErrorText } from "./cliGuidance.js";
 import { SolverApiError, SolverApiNetworkError } from "./errors.js";
-import { createRunReplayKey, hostOneRunApprovalRequest, readHostOneRunApproval, previewRunRequest, RunAdmissionError, RunAdmissionStore, assertTestedByokFunding, testedByokRunConsent, TestedByokPrecheckError, testedByokPrecheckDocument, } from "./runAdmission.js";
+import { createRunReplayKey, hostOneRunApprovalRequest, readHostOneRunApproval, previewRunRequest, RunAdmissionError, RunAdmissionStore, assertTestedByokFunding, testedByokRunConsent, inventoryRunConsent, settledReceiptCharge, TestedByokPrecheckError, testedByokPrecheckDocument, } from "./runAdmission.js";
 import { resolveRunAuthorizationBoundary, unsupportedRunBoundaryReport, } from "./runAuthorizationBoundary.js";
 import { claimSetupRecovery, loadSetupRecovery, setupRequestHash, setupRecoveryCommand, SetupRecoveryStorageError } from "./cliSetupRecovery.js";
 import { bootstrapOrganizationKey, bootstrapOrganizationKeyInTerminal, loadStoredOrganizationKey } from "./cliOrganizationKeyBootstrap.js";
@@ -23,6 +23,8 @@ import { runVerifierKit } from "./cliVerifierKit.js";
 import { REMOTE_ACCESS_MODES, resolveVerifierCapabilitiesCommand, verifierCommandFlagSets } from "./cliVerifierCapabilities.js";
 import { resolveTopLevelHelp, USAGE_LINE } from "./cliHelp.js";
 import { resolveCustomerReadCommand, runCustomerReadCommand } from "./cliCustomerReads.js";
+import { resolveInventoryCommand, runInventoryCommand, inventoryCommandReadOnly, readInventoryRunApproval } from "./cliInventory.js";
+import { resolveSelectedChecksCommand, runSelectedChecksCommand, selectedChecksFailure, selectedChecksPaidRefusal } from "./cliSelectedChecks.js";
 import { runPreviewLines, runResultLines } from "./runResultOutput.js";
 import { ModelAddPolicyError, modelAddOperationKey, normalizeModelAddRequest, } from "./modelAddPolicy.js";
 import { applicationSummary, receiptCostLines, readySetupRecovery, newSetupPlanOutput, browserHandoff, liveProofCostSummary, planCostSummary, readCreditSummary, tenantStartVerificationOnward, TENANT_START_OUTPUT_VERSION, tenantStartIsInteractive, terminalText } from "./tenantStartOutput.js";
@@ -82,7 +84,7 @@ function authenticatedCommand(args) {
         || args[0] === "doctor"
         || (args[0] === "tenant" && ["start", "show"].includes(args[1] ?? ""))
         || (args[0] === "provider" && ["list", "connect", "rotate", "disconnect"].includes(args[1] ?? ""))
-        || (args[0] === "models" && ["list", "use", "add"].includes(args[1] ?? ""))
+        || (args[0] === "models" && ["list", "use", "add", "inventory"].includes(args[1] ?? ""))
         || (args[0] === "arms" && args[1] === "disable")
         || args[0] === "run"
         || (args[0] === "verifier" && ["attach", "connect", "list", "show", "test"].includes(args[1] ?? "")
@@ -1345,12 +1347,12 @@ async function runExecution(solver, args, outputContext = {}) {
     assertCommandFlags(args, 1, new Set(["--json", "--yes"]), new Set([
         "--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
         "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--execution-id",
-        "--price-approval-sha256",
+        "--price-approval-sha256", "--inventory-approval",
     ]), true);
     const executionId = flagValue(args, "--execution-id");
     if (executionId) {
         const other = ["--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
-            "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--price-approval-sha256", "--yes"]
+            "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--price-approval-sha256", "--inventory-approval", "--yes"]
             .find(flag => hasFlag(args, flag));
         if (other || args.slice(1).some(value => !value.startsWith("--") && value !== executionId)) {
             throw new InspectionUsageError("Use millwork run --execution-id <id> [--json] by itself; inspection never submits work.");
@@ -1365,7 +1367,7 @@ async function runExecution(solver, args, outputContext = {}) {
     }
     const positional = args.slice(1).filter((value, index, tail) => !value.startsWith("--")
         && (index === 0 || !new Set(["--preset", "--objective", "--arm-id", "--verifier-id", "--max-cost-usd",
-            "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--execution-id", "--price-approval-sha256"]).has(tail[index - 1])));
+            "--max-runtime-s", "--data-class", "--idempotency-key", "--replay-key", "--execution-id", "--price-approval-sha256", "--inventory-approval"]).has(tail[index - 1])));
     const objective = flagValue(args, "--objective") ?? positional.join(" ");
     if (!objective)
         throw new InspectionUsageError("run requires an objective, for example: millwork run --preset <id> --objective \"Summarize this\"");
@@ -1415,53 +1417,72 @@ async function runExecution(solver, args, outputContext = {}) {
         const maxCost = Number(flagValue(args, "--max-cost-usd"));
         const maxRuntime = Number(flagValue(args, "--max-runtime-s"));
         const dataClass = (flagValue(args, "--data-class") ?? "public");
-        if (!Number.isFinite(maxCost) || maxCost <= 0 || !Number.isInteger(maxRuntime) || maxRuntime <= 0) {
-            throw new InspectionUsageError("Without --preset, positive --max-cost-usd and --max-runtime-s are required.");
+        const zeroInventoryBudget = maxCost === 0 && Boolean(flagValue(args, "--inventory-approval"));
+        if (!Number.isFinite(maxCost) || maxCost < 0 || maxCost === 0 && !zeroInventoryBudget || !Number.isInteger(maxRuntime) || maxRuntime <= 0) {
+            throw new InspectionUsageError("Without --preset, positive --max-cost-usd and --max-runtime-s are required; an original inventory approval may use a zero provider budget.");
         }
         if (!new Set(["public", "sandbox", "tenant_internal"]).has(dataClass)) {
             throw new InspectionUsageError("--data-class must be public, sandbox, or tenant_internal");
         }
         policy = { data_classes: [dataClass], budget: { max_cost_usd: maxCost, max_runtime_s: maxRuntime } };
     }
-    const [account, catalog, selectedArm] = await Promise.all([solver.account.get(), solver.modelCatalog.get(), solver.arms.get(armId)]);
+    const [account, selectedArm] = await Promise.all([solver.account.get(), solver.arms.get(armId)]);
+    const authority = selectedArm.route_authority;
+    const catalog = selectedArm.route_authority_id ? { models: [] } : await solver.modelCatalog.get();
     const model = catalog.models.find(row => row.deployment.model_deployment_id === selectedArm.model_deployment_id);
     let fee = account.billing?.platform_fee_usd_per_execution;
-    const accessLane = model?.connection.access_lane;
-    const providerId = model?.source.source_id;
-    if (!model || !providerId || (accessLane !== "byok" && accessLane !== "millwork_pool")) {
-        throw new InspectionUsageError("The selected arm's provider and paid access lane are unavailable; no run was admitted.");
+    const accessLane = authority ? "byok" : model?.connection.access_lane;
+    const providerId = authority?.source_id ?? model?.source.source_id;
+    if (!providerId || (accessLane !== "byok" && accessLane !== "millwork_pool")
+        || (selectedArm.route_authority_id && (!authority || authority.authority_id !== selectedArm.route_authority_id
+            || authority.model_deployment_id !== selectedArm.model_deployment_id)) || (!authority && !model)) {
+        throw new InspectionUsageError("The selected arm's provider, immutable route permission or paid access lane is unavailable; no run was admitted.");
     }
     let request = {
-        task: { objective },
-        policy,
-        routing: { required_arm_id: armId },
+        task: { objective }, policy, routing: { required_arm_id: armId },
         ...(flagValue(args, "--verifier-id") ? { verifier_id: flagValue(args, "--verifier-id") } : {}),
     };
     const admission = new RunAdmissionStore({ boundary });
     const suppliedReplayKey = flagValue(args, "--replay-key") ?? flagValue(args, "--idempotency-key");
     const suppliedPrice = flagValue(args, "--price-approval-sha256");
-    if (suppliedPrice)
-        request = { ...request, tested_byok: {
+    const inventoryApprovalPath = flagValue(args, "--inventory-approval");
+    if (authority) {
+        if (!inventoryApprovalPath || suppliedPrice)
+            throw new InspectionUsageError("An inventory run requires --inventory-approval <original-reviewed-execute-approval.json>, including its exact quote hash. Plan and quote that actual task first; keep the file and replay key unchanged.");
+        request = { ...request, tested_byok: undefined, byok_inventory: await readInventoryRunApproval(inventoryApprovalPath) };
+    }
+    else if (inventoryApprovalPath) {
+        throw new InspectionUsageError("The selected arm does not carry the inventory permission in this approval file.");
+    }
+    else if (suppliedPrice && model)
+        request = { ...request, byok_inventory: undefined, tested_byok: {
                 model_deployment_id: model.deployment.model_deployment_id,
                 provider_usage_budget_usd: policy.budget.max_cost_usd, price_approval_sha256: suppliedPrice
             } };
     const recovered = suppliedReplayKey ? await admission.recoverAccepted({
         context: { account_id: account.tenant_id, request, arm_id: armId,
             provider_id: providerId, access_lane: accessLane, platform_fee_usd: fee ?? null },
-        replayKey: suppliedReplayKey
+        replayKey: suppliedReplayKey, recoverUncertain: true
     }) : null;
     if (recovered)
         fee = recovered.preview.platform_fee_usd ?? undefined;
     let quote;
-    if (!recovered && accessLane === "byok" && model.tested_byok_access) {
+    let inventoryQuote;
+    if (!recovered && authority && request.byok_inventory) {
+        const consent = request.byok_inventory;
+        inventoryQuote = await solver.modelInventory.quote({ authority_id: consent.authority_id,
+            plan_token: consent.plan_token, plan_digest: consent.plan_digest, original_inputs: consent.original_inputs,
+            provider_usage_budget_usd: consent.provider_usage_budget_usd });
+        inventoryRunConsent(request, authority, inventoryQuote);
+        if (fee !== inventoryQuote.millwork_fee_usd)
+            throw new TestedByokPrecheckError("quote_unavailable", "The account fee and inventory quote disagree. Refresh both before requesting approval.");
+    }
+    else if (!recovered && accessLane === "byok" && model?.tested_byok_access) {
         const deploymentId = model.deployment.model_deployment_id;
         quote = await solver.modelCatalog.quote({ model_deployment_id: deploymentId,
             provider_usage_budget_usd: policy.budget.max_cost_usd });
-        // Keep an explicit approved hash in the replay identity. Fresh submissions
-        // validate it below; an already accepted execution can still be inspected
-        // after the catalog price changes, without authorizing another submission.
-        const currentConsent = testedByokRunConsent({ ...request, tested_byok: undefined }, deploymentId, quote);
-        request = { ...request, tested_byok: suppliedPrice
+        const currentConsent = testedByokRunConsent({ ...request, tested_byok: undefined, byok_inventory: undefined }, deploymentId, quote);
+        request = { ...request, byok_inventory: undefined, tested_byok: suppliedPrice
                 ? { ...currentConsent, price_approval_sha256: suppliedPrice } : currentConsent };
         if (fee !== quote.millwork_fee_usd)
             throw new TestedByokPrecheckError("quote_unavailable", "The account fee and quote disagree. Refresh both before requesting approval.");
@@ -1470,7 +1491,11 @@ async function runExecution(solver, args, outputContext = {}) {
         throw new TestedByokPrecheckError("quote_unavailable", "This saved model no longer has an eligible tested customer-owned quote.");
     }
     const precheckFunding = () => {
-        if (quote) {
+        if (inventoryQuote && authority) {
+            inventoryRunConsent(request, authority, inventoryQuote);
+            assertTestedByokFunding(account, inventoryQuote.millwork_fee_usd);
+        }
+        if (quote && model) {
             testedByokRunConsent(request, model.deployment.model_deployment_id, quote);
             assertTestedByokFunding(account, quote.millwork_fee_usd);
         }
@@ -1481,14 +1506,17 @@ async function runExecution(solver, args, outputContext = {}) {
     const submissionIntent = suppliedReplayKey ? "recover_same_run" : "new_run";
     const replayKey = suppliedReplayKey ?? createRunReplayKey(preview);
     const command = replayCommand(recoveryArgs, replayKey);
-    const costReview = { model_key: model.model.model_key, arm_id: armId,
-        source_id: model.source.source_id, access_lane: model.connection.access_lane,
-        data_classes: [...policy.data_classes], max_runtime_s: policy.budget.max_runtime_s,
-        platform_fee_usd: fee ?? null,
-        model_budget_usd: policy.budget.max_cost_usd,
-        model_usage_payer: model.connection.access_lane === "byok" ? "customer_provider_account" : "millwork_credit",
+    const costReview = { model_key: authority?.prepared_request.model ?? model.model.model_key, arm_id: armId,
+        source_id: providerId, connection_id: authority?.connection_id
+            ?? (model?.connection.access_lane === "byok" ? model.connection.connection_id : undefined),
+        access_lane: accessLane, data_classes: [...policy.data_classes], max_runtime_s: policy.budget.max_runtime_s,
+        platform_fee_usd: fee ?? null, model_budget_usd: policy.budget.max_cost_usd,
+        model_usage_payer: accessLane === "byok" ? "customer_provider_account" : "millwork_credit",
         combined_allowance_usd: preview.declared_maximum_usd,
-        budget_note: "Model budget is a stop threshold, not a final quote; an in-flight call can exceed it.",
+        budget_note: inventoryQuote ? "The quote binds a complete computed provider maximum to the original task and permission."
+            : "Model budget is a stop threshold, not a final quote; an in-flight call can exceed it.",
+        ...(inventoryQuote ? { byok_inventory_quote: inventoryQuote, authority_id: authority.authority_id,
+            authority_revision: authority.authority_revision, testing: "not_asserted_by_permission" } : {}),
         ...(quote ? { tested_byok_quote: quote,
             spending_authority: "This API key can spend using its existing tested customer-owned authority. The quote grants no new authority; host run approval is still required." } : {}) };
     if (interactive)
@@ -1499,6 +1527,8 @@ async function runExecution(solver, args, outputContext = {}) {
             : `New-run replay key before submission: ${replayKey} (generated because no replay key was supplied).\n`);
     if (interactive && quote)
         process.stderr.write(`Provider price basis: ${terminalText(quote.pricing_basis)}\nPrice revision: ${terminalText(quote.pricing_revision)}\nPrice approval hash: ${terminalText(quote.price_approval_sha256)}\nThis API key can spend on its existing tested customer-owned authority. A quote does not replace host approval.\n`);
+    if (interactive && inventoryQuote)
+        process.stderr.write(`Inventory provider maximum: USD ${inventoryQuote.provider_maximum_usd}\nRoute permission: ${terminalText(inventoryQuote.authority_id)}\nPrice approval hash: ${terminalText(inventoryQuote.price_approval_sha256)}\nPermission does not assert testing or replace host approval.\n`);
     let grant;
     try {
         grant = recovered?.grant ?? await admission.admit({ preview, replayKey, beforeNewReservation: precheckFunding });
@@ -1527,7 +1557,7 @@ async function runExecution(solver, args, outputContext = {}) {
             approval = await readHostOneRunApproval(boundary, preview, replayKey);
         }
         catch (approvalError) {
-            if (approvalError instanceof RunAdmissionError && approvalError.code === "approval_request_mismatch" && quote) {
+            if (approvalError instanceof RunAdmissionError && approvalError.code === "approval_request_mismatch" && quote && model) {
                 testedByokRunConsent(request, model.deployment.model_deployment_id, quote);
             }
             throw approvalError;
@@ -1595,9 +1625,9 @@ async function runExecution(solver, args, outputContext = {}) {
     }
     const result = current.status === "completed" ? await solver.executions.result(current.execution_id) : null;
     const receipt = await solver.receipts.get(current.execution_id);
-    if (receipt.totals) {
-        await admission.settle(grant, receipt.totals.usd + receipt.totals.platform_fee_usd);
-    }
+    const settledCharge = settledReceiptCharge(receipt);
+    if (settledCharge !== null)
+        await admission.settle(grant, settledCharge);
     if (interactive)
         process.stdout.write(`${result ? `${terminalText(result.final_text, true)}\n` : ""}Execution ${terminalText(current.execution_id)} — ${terminalText(current.status)}\nReceipt ${terminalText(current.execution_id)}\n${[...receiptCostLines(receipt), ...runResultLines(receipt)].map((line) => `${terminalText(line)}\n`).join("")}`);
     else
@@ -1609,6 +1639,16 @@ async function runExecution(solver, args, outputContext = {}) {
         process.exitCode = 1;
 }
 async function main() {
+    if (process.argv[2] === "offer") {
+        const { runOfferCli } = await import("./provider/supplierCli.js");
+        await runOfferCli(process.argv.slice(3));
+        return;
+    }
+    if (process.argv[2] === "supplier") {
+        const { runSupplierCli } = await import("./provider/supplierCli.js");
+        await runSupplierCli(process.argv.slice(3));
+        return;
+    }
     // Answered before anything reads a key, touches the key store, or opens a
     // socket: an agent must be able to discover this surface from a clean
     // install with nothing configured.
@@ -1685,7 +1725,62 @@ async function main() {
         }
     }
     const customerRead = resolveCustomerReadCommand(args);
+    const selectedChecks = resolveSelectedChecksCommand(args);
+    const inventoryCommand = selectedChecks ? null : resolveInventoryCommand(args);
+    // A terminal flag or the existing one-run host channel cannot approve a batch.
+    // Refuse before key-store access, input-file loading, client creation or I/O.
+    const batchRefusal = selectedChecks && selectedChecksPaidRefusal(selectedChecks);
+    if (batchRefusal) {
+        process.stdout.write(interactive ? `${terminalText(JSON.stringify(batchRefusal, null, 2), true)}\n` : `${JSON.stringify(batchRefusal, null, 2)}\n`);
+        process.exitCode = 2;
+        return;
+    }
     await prepareOrganizationKey(args, tenantStart);
+    if (selectedChecks) {
+        const missing = qualifyMissingCredential({ apiKey: process.env.SOLVERAPI_API_KEY });
+        if (missing) {
+            emitQualification(missing);
+            return;
+        }
+        const solver = new Solver({ apiKey: process.env.SOLVERAPI_API_KEY, baseUrl: process.env.SOLVERAPI_BASE_URL ?? DEFAULT_API_BASE_URL,
+            maxRetries: 0, fetchImpl: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }) });
+        let document;
+        try {
+            document = await runSelectedChecksCommand(selectedChecks, solver);
+        }
+        catch (error) {
+            const failure = selectedChecksFailure(selectedChecks, error);
+            if (!failure)
+                throw error;
+            document = failure;
+        }
+        process.stdout.write(interactive ? `${terminalText(JSON.stringify(document, null, 2), true)}\n` : `${JSON.stringify(document, null, 2)}\n`);
+        if (document.error)
+            process.exitCode = 1;
+        return;
+    }
+    if (inventoryCommand) {
+        const missing = qualifyMissingCredential({ apiKey: process.env.SOLVERAPI_API_KEY });
+        if (missing) {
+            emitQualification(missing);
+            return;
+        }
+        const solver = new Solver({ apiKey: process.env.SOLVERAPI_API_KEY, baseUrl: process.env.SOLVERAPI_BASE_URL ?? DEFAULT_API_BASE_URL,
+            maxRetries: 0, fetchImpl: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }) });
+        try {
+            const document = await runInventoryCommand(inventoryCommand, solver);
+            process.stdout.write(interactive ? `${terminalText(JSON.stringify(document, null, 2), true)}\n` : `${JSON.stringify(document, null, 2)}\n`);
+        }
+        catch (error) {
+            if (!(error instanceof SolverApiError))
+                throw error;
+            const document = { schema_version: "millwork.model-inventory.v1", operation: inventoryCommand.action,
+                read_only: inventoryCommandReadOnly(inventoryCommand), error: "solver_api_error", problem: error.problem };
+            process.stdout.write(interactive ? `${terminalText(JSON.stringify(document, null, 2), true)}\n` : `${JSON.stringify(document, null, 2)}\n`);
+            process.exitCode = 1;
+        }
+        return;
+    }
     if (customerRead) {
         const missing = qualifyMissingCredential({ apiKey: process.env.SOLVERAPI_API_KEY });
         if (missing) {

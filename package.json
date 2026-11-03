@@ -1,6 +1,6 @@
 {
   "name": "@millwork/solver",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "Millwork Solver TypeScript SDK -- typed client, idempotency, retries, and execution event polling.",
   "license": "Apache-2.0",
   "repository": {
@@ -20,6 +20,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./provider": {
+      "types": "./dist/provider/index.d.ts",
+      "import": "./dist/provider/index.js"
     }
   },
   "files": [
@@ -32,10 +36,16 @@
     "build": "tsc -p tsconfig.json",
     "test": "node --import tsx --test --test-concurrency=1 $(find test -name '*.test.ts')"
   },
-  "dependencies": {},
+  "dependencies": {
+    "ajv": "^8.20.0"
+  },
   "devDependencies": {
     "@types/node": "^20.12.12",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
+  },
+  "imports": {
+    "#provider-feed-validator": "./dist/provider-validator/providerValidator.js",
+    "#provider-validation-context": "./dist/provider-validator/providerValidationContext.js"
   }
 }

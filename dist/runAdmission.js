@@ -84,6 +84,62 @@ export function testedByokRunConsent(request, deploymentId, quote) {
     return { model_deployment_id: deploymentId, provider_usage_budget_usd: quote.provider_usage_budget_usd,
         price_approval_sha256: quote.price_approval_sha256 };
 }
+/** Check the original execute plan and quote; this never plans, renews or grants permission. */
+export function inventoryRunConsent(request, authority, quote) {
+    const consent = request.byok_inventory;
+    const original = consent?.original_inputs;
+    const budget = exactMicrousd(request.policy.budget.max_cost_usd);
+    const fee = exactMicrousd(quote?.millwork_fee_usd);
+    const maximum = exactMicrousd(quote?.provider_maximum_usd);
+    if (request.mode === "echo" || !consent || authority.state !== "authorized" || request.tested_byok || request.review_composer || request.verifier_id
+        || request.task.inputs_ref || request.policy.on_eval?.some(action => action !== "gate")
+        || !request.routing?.required_arm_id || original?.purpose !== "execute"
+        || original.authority_id !== authority.authority_id || consent.authority_id !== authority.authority_id
+        || original.item_id !== authority.item_id || original.route_id !== authority.route_id
+        || original.observation_revision !== authority.observation_revision
+        || original.task?.objective !== request.task.objective
+        || request.policy.budget.max_runtime_s > authority.task_envelope.max_runtime_s
+        || request.policy.data_classes.some(dataClass => !authority.task_envelope.data_classes.includes(dataClass))) {
+        throw new TestedByokPrecheckError("quote_unavailable", "An inventory run requires the original execute plan for this exact task, saved route and permission envelope, with the built-in check and no fallback.");
+    }
+    if (quote?.schema_version !== "byok-inventory-quote/v1" || quote.authority_id !== authority.authority_id
+        || quote.model_deployment_id !== authority.model_deployment_id || quote.plan_digest !== consent.plan_digest
+        || !/^[a-f0-9]{64}$/.test(quote.price_approval_sha256) || !consent.plan_token?.trim()
+        || budget === null || budget < 0 || exactMicrousd(consent.provider_usage_budget_usd) !== budget
+        || exactMicrousd(quote.provider_usage_budget_usd) !== budget || fee === null || fee < 0
+        || maximum === null || maximum < 0 || maximum > budget || !quote.bound
+        || quote.bound.provider_maximum_microusd !== maximum || !Number.isSafeInteger(budget + fee)
+        || exactMicrousd(quote.maximum_combined_usd) !== budget + fee || quote.provider_invoice_authoritative !== true) {
+        throw new TestedByokPrecheckError("quote_unavailable", "The server did not return a complete matching inventory quote. Recover the original plan and review its blockers.");
+    }
+    if (consent.price_approval_sha256 !== quote.price_approval_sha256) {
+        throw new TestedByokPrecheckError("price_changed", "The reviewed inventory quote changed. Review the current quote and obtain a fresh host approval for the original task.");
+    }
+    return consent;
+}
+/** A partial cost is not a settled invoice. Unknown exposure keeps the original reservation. */
+export function settledReceiptCharge(receipt) {
+    if (!receipt || typeof receipt !== "object")
+        return null;
+    const record = receipt;
+    if (record.byok_inventory !== undefined) {
+        if (!record.byok_inventory || typeof record.byok_inventory !== "object")
+            return null;
+        const inventory = record.byok_inventory;
+        if (!["not_sent", "known_paid", "rejected_paid"].includes(String(inventory.outcome))
+            || inventory.unresolved_exposure_microusd !== 0
+            || !Number.isSafeInteger(inventory.provider_cost_microusd)
+            || inventory.provider_cost_microusd < 0)
+            return null;
+    }
+    if (!record.totals || typeof record.totals !== "object")
+        return null;
+    const totals = record.totals;
+    const usage = exactMicrousd(totals.usd);
+    const fee = exactMicrousd(totals.platform_fee_usd);
+    return usage !== null && fee !== null && usage >= 0 && fee >= 0 && Number.isSafeInteger(usage + fee)
+        ? (usage + fee) / 1_000_000 : null;
+}
 export class RunAdmissionError extends Error {
     code;
     constructor(code, message) {
@@ -129,6 +185,7 @@ export function previewRunRequest(context) {
         compose: context.request.compose ?? "auto",
         ...(context.request.review_composer ? { review_composer: context.request.review_composer } : {}),
         ...(context.request.tested_byok ? { tested_byok: { ...context.request.tested_byok } } : {}),
+        ...(context.request.byok_inventory ? { byok_inventory: JSON.parse(stableJson(context.request.byok_inventory)) } : {}),
         policy: context.request.policy,
         model_budget_usd: context.request.policy.budget.max_cost_usd,
         platform_fee_usd: context.platform_fee_usd,
@@ -530,25 +587,27 @@ export class RunAdmissionStore {
         this.journalFile = options.boundary.recoveryJournalFile;
         this.now = options.now ?? (() => new Date());
     }
-    /** Recover only a recorded execution. The caller-owned amount is a hint for
-     * rebuilding the original hash, never authority: the exact request/key must
-     * still match the host approval and its read-only ledger. This path cannot
-     * reserve or submit work, even if a journal row is forged or changes later. */
+    /** Recover a recorded execution, or explicitly replay an uncertain original
+     * submission. The caller-owned amount only rebuilds the original hash: exact
+     * current host approval and its read-only ledger remain authoritative. This
+     * method never creates a reservation. A replay must send only the unchanged
+     * request/key; the server still refuses expired inputs if it never accepted. */
     async recoverAccepted(input) {
         if (!input.replayKey.trim())
             return null;
+        const recoverable = (row) => Boolean(row && (((row.state === "accepted" || row.state === "settled") && typeof row.execution_id === "string" && row.execution_id)
+            || (input.recoverUncertain === true && row.state === "reserved" && row.execution_id === null)));
         const candidate = (await loadRecoveryJournal(this.journalFile)).reservations[input.replayKey];
-        if (!candidate || (candidate.state !== "accepted" && candidate.state !== "settled") || !candidate.execution_id)
+        if (!recoverable(candidate))
             return null;
         return withRecoveryJournal(this.journalFile, this.now, async (journal) => {
             const existing = journal.reservations[input.replayKey];
-            if (!existing || (existing.state !== "accepted" && existing.state !== "settled")
-                || typeof existing.execution_id !== "string" || !existing.execution_id)
+            if (!recoverable(existing))
                 return null;
             const maximum = existing.declared_maximum_usd;
             if (typeof maximum !== "number" || !Number.isFinite(maximum)
                 || maximum < input.context.request.policy.budget.max_cost_usd) {
-                throw new RunAdmissionError("replay_request_mismatch", "The recorded accepted maximum cannot bind this request.");
+                throw new RunAdmissionError("replay_request_mismatch", "The original reserved maximum cannot bind this request.");
             }
             const preview = previewRunRequest({ ...input.context,
                 platform_fee_usd: money(maximum - input.context.request.policy.budget.max_cost_usd) });
@@ -557,7 +616,7 @@ export class RunAdmissionStore {
             }
             const approval = await readHostOneRunApproval(this.boundary, preview, input.replayKey, this.now);
             if (!approval)
-                throw new RunAdmissionError("missing_authorization", "Accepted recovery still requires the host's exact request approval.");
+                throw new RunAdmissionError("missing_authorization", "Recovery still requires the host's exact request approval.");
             const authority = await this.establishAuthority(preview, input.replayKey, approval);
             const hostRecord = (await this.readHostLedger()).reservations[input.replayKey];
             if (hostRecord && hostRecord.request_hash !== preview.request_hash) {
@@ -566,7 +625,7 @@ export class RunAdmissionStore {
             if (hostRecord?.state === "released") {
                 throw new RunAdmissionError("replay_closed", "The host closed this replay; recovery cannot override it.");
             }
-            return { preview, grant: { action: "inspect", replay_key: input.replayKey,
+            return { preview, grant: { action: existing.execution_id ? "inspect" : "replay", replay_key: input.replayKey,
                     request_hash: preview.request_hash, authorization_kind: authority.kind,
                     authorization_id: authority.authorization_id, declared_maximum_usd: maximum,
                     execution_id: existing.execution_id } };
