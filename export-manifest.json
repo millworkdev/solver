@@ -163,7 +163,7 @@
     },
     {
       "path": "dist/index.d.ts",
-      "sha256": "a88d2b182c8fe3dfa2eb33a2a092278d486d2ef87151fd753248f091a5deb8fc"
+      "sha256": "cef3e1f3411b2649ad8e86019cdac93b961a7db7d2563ee27c0bb94e7c5b37c1"
     },
     {
       "path": "dist/index.js",
@@ -239,7 +239,7 @@
     },
     {
       "path": "dist/modelInventory.d.ts",
-      "sha256": "e1389488d99524533298911812cc5326e775e65769f8bd02d5a6dc423fb3ecaf"
+      "sha256": "6eeecdfee69e6f4f26696ab87aa52bfb6b0acbc5599f77ce33380182eca49631"
     },
     {
       "path": "dist/modelInventory.js",
@@ -295,11 +295,11 @@
     },
     {
       "path": "dist/provider/supplierCli.d.ts",
-      "sha256": "f7cbc77c6b2655a3cb07cd76f0a89c44718c8c860cecf8c1f47faa71e14307a0"
+      "sha256": "a781d0ff4f08800513b6caba4b32eebeb0ccc01da8bf470375d938ddc862022c"
     },
     {
       "path": "dist/provider/supplierCli.js",
-      "sha256": "0a7954655f2b50615d3af6c1b03d01086373c69f26cb4ee635a7aff568c8ad57"
+      "sha256": "fa124ea27bb1351deffa4e78b728fc9ca5267e6e90430f56ce1cfb6825891232"
     },
     {
       "path": "dist/provider/webhookVerifier.d.ts",
@@ -542,5 +542,5 @@
       "sha256": "eba4a7197006215a72303b4b19f092eafd7ce09abd5394801c37ea6093b76f4c"
     }
   ],
-  "aggregate_sha256": "dc05bbbf1a7f90b4f9c1a51b7cb08e5970cfbd1eb9eccab20493b6cbc84ea291"
+  "aggregate_sha256": "1831e5488521221d8c02f905371eb7d6078321176f2d06cabc3ce2b1af881935"
 }

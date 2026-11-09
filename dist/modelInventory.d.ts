@@ -1,6 +1,6 @@
 import type { ArmWrite, DataClass, ModelCatalogEntry, ExecutionRequest, LifecycleState } from "./types.js";
 /** Known values aid discovery; future server codes remain available to callers. */
-export type ByokBlockerCode = "access_unverified" | "binding_revoked" | "binding_rotated" | "identity_unbound" | "policy_disabled" | "authority_expired" | "price_incomplete" | "spend_bound_missing" | "capability_unverified" | "model_details_unverified" | "data_policy_unknown" | "task_unsupported" | "source_unavailable" | "evidence_expired" | "snapshot_changed" | "plan_changed" | "consent_missing" | "quote_expired" | "invocation_access_unverified" | "source_profile_unproven" | "version_incompatible" | "unknown_paid" | "usage_unreliable" | "bound_exceeded" | (string & {});
+export type ByokBlockerCode = "access_unverified" | "binding_revoked" | "binding_rotated" | "identity_unbound" | "policy_disabled" | "authority_expired" | "price_incomplete" | "spend_bound_missing" | "capability_unverified" | "model_details_unverified" | "data_policy_unknown" | "task_unsupported" | "source_unavailable" | "profile_status_unverified" | "evidence_expired" | "snapshot_changed" | "plan_changed" | "consent_missing" | "quote_expired" | "invocation_access_unverified" | "source_profile_unproven" | "version_incompatible" | "unknown_paid" | "usage_unreliable" | "bound_exceeded" | (string & {});
 export interface ByokBlocker {
     code: ByokBlockerCode;
     actor: string;
@@ -11,7 +11,7 @@ export interface ByokBlocker {
 export interface ByokReadiness {
     disposition: "ready" | "needs_action" | "not_available";
     evaluated_at: string;
-    planner_version: "openrouter.inventory/v1" | "openai.inventory/v1" | "gemini.inventory/v1" | "xai.inventory/v1" | "byok.inventory/unsupported";
+    planner_version: "openrouter.inventory/v1" | "openai.inventory/v1" | "gemini.inventory/v1" | "xai.inventory/v1" | "deepseek.inventory/v1" | "fireworks.inventory/v1" | "bedrock.inventory/v1" | "anthropic.inventory/v1" | "byok.inventory/unsupported";
     policy_revision: number | null;
     blockers: ByokBlocker[];
 }
@@ -29,6 +29,8 @@ export interface ByokTaskEnvelope {
     data_classes: DataClass[];
 }
 export interface ByokRouteFacts {
+    bedrock?: AwsBedrockInventoryDetails;
+    fireworks?: FireworksInventoryDetails;
     gemini?: {
         resource_name: string;
         base_model_id: string | null;
@@ -36,6 +38,7 @@ export interface ByokRouteFacts {
         supported_generation_methods: string[] | null;
     };
     xai?: XaiInventoryDetails;
+    deepseek?: DeepSeekInventoryDetails;
     invocation_id: string;
     canonical_id: string | null;
     alias_target_id?: string | null;
@@ -81,7 +84,7 @@ export interface ByokInventorySnapshot {
     connection_id: string;
     source_id: string;
     binding_revision: number;
-    scope: "account_observed";
+    scope: "account_observed" | "bound_profile_observed";
     completeness: "complete" | "partial" | "importing" | "failed";
     as_of: string;
     observed_count: number;
@@ -99,7 +102,7 @@ export interface ByokInventoryRoute {
     source_id: string;
     connection_id: string;
     connection_name: string;
-    protocol_profile: "openai_chat" | "gemini_generate_content" | null;
+    protocol_profile: "openai_chat" | "gemini_generate_content" | "anthropic_messages" | null;
     location: string | null;
     commercial_owner: "customer";
     facts: ByokRouteFacts;
@@ -218,6 +221,7 @@ export interface ByokImportWire {
     completed_at: string | null;
     observed_count: number;
     failure_code: string | null;
+    recovery_action?: string | null;
 }
 export interface ByokPlanRequest {
     item_id: string;
@@ -230,7 +234,8 @@ export interface ByokPlanRequest {
     };
     authority_id?: string;
 }
-export interface ByokPreparedRequest {
+export type ByokPreparedRequest = OpenRouterPreparedRequest | AnthropicPreparedRequest;
+export interface OpenRouterPreparedRequest {
     model: string;
     stream: false;
     max_tokens: number;
@@ -252,6 +257,29 @@ export interface ByokPreparedRequest {
     usage: {
         include: true;
     };
+}
+export interface AnthropicPreparedRequest {
+    protocol: "anthropic_messages";
+    api_version: "2026-10-21";
+    model: string;
+    stream: false;
+    max_tokens: number;
+    service_tier: "standard_only";
+    inference_geo: "global";
+    thinking: {
+        type: "disabled" | "adaptive";
+    };
+    reasoning?: never;
+}
+export interface AnthropicBoundEvidence {
+    version: "anthropic.messages/v1";
+    proof_digest: string;
+    evidence_refs: string[];
+    expires_at: string;
+    resolved_model_ids: string[];
+    input_usd_per_token: string;
+    output_usd_per_token: string;
+    request_usd: string;
 }
 export type ByokUsageField = "prompt_tokens" | "completion_tokens" | "uncached_prompt_tokens" | "visible_completion_tokens" | "completion_tokens_details.reasoning_tokens" | "prompt_tokens_details.cached_tokens" | "prompt_tokens_details.cache_write_tokens" | "request";
 export interface ByokClassEvidence {
@@ -289,6 +317,7 @@ export interface ByokBound {
     source_contract_revision: string;
     assumptions: string[];
     class_evidence?: ByokClassEvidence;
+    anthropic_evidence?: AnthropicBoundEvidence;
 }
 export interface ByokPlanWire {
     purpose: "add" | "execute";
@@ -381,6 +410,8 @@ export interface ByokInventoryApproval {
 }
 /** Unknown paid exposure is retained separately from any reported partial cost. */
 export interface ByokInventoryReceipt {
+    provider_cost_basis?: "frozen_native_rate_calculation";
+    native_outcome?: "ok" | "no_visible_output" | "truncated" | "refused" | "malformed" | "identity_mismatch" | "usage_unreliable" | "bound_exceeded";
     /** Immutable permission and source controls retained for this invocation. */
     authority: ByokAuthorityWire;
     requested_invocation_id: string;
@@ -553,4 +584,80 @@ export interface XaiInventoryDetails {
     search_price: number | null;
     search_rate_unit: "usd_cents_per_100_million_searches";
     long_context_threshold: number | null;
+}
+export interface AwsBedrockInventoryDetails {
+    reader_version: "bedrock.inventory/v1";
+    scope: "bound_profile_only";
+    whole_account_inventory: false;
+    scope_reason: "single_profile_only";
+    partition: "aws" | "aws-us-gov" | "aws-cn";
+    source_region: string;
+    account_scope_ref: string | null;
+    profile_binding_ref: string | null;
+    profile_id: string;
+    profile_resource: "inference-profile" | "application-inference-profile";
+    profile_type: "SYSTEM_DEFINED" | "APPLICATION" | null;
+    profile_status: "ACTIVE" | "UNKNOWN";
+    created_at: string | null;
+    updated_at: string | null;
+    foundation_models: Array<{
+        model_id: string;
+        region: string | null;
+    }>;
+    destination_scope: "global_routing" | "observed_member_regions";
+    invocation_entitlement: "unverified";
+    model_lifecycle: null;
+}
+export interface FireworksInventoryDetails {
+    reader_version: "fireworks.inventory/v1";
+    connected_account_id: string;
+    owner_account_id: string;
+    list_account_id: string;
+    route_kind: "model" | "deployment" | "lora";
+    model_resource: string | null;
+    deployment_resource: string | null;
+    deployed_model_resource: string | null;
+    model_state: string | null;
+    deployment_state: string | null;
+    binding_state: string | null;
+    kind: string | null;
+    public: boolean | null;
+    supports_serverless: boolean | null;
+    supports_image_input: boolean | null;
+    supports_tools: boolean | null;
+    chat_template_present: boolean | null;
+    deprecation_date: string | null;
+    create_time: string | null;
+    update_time: string | null;
+    expire_time: string | null;
+    delete_time: string | null;
+    active_model_version: string | null;
+    pricing_plan_id: string | null;
+    metadata_complete: boolean;
+    identity_conflict: boolean;
+    /** Reported SKU amounts retain their native unit; they are not a reviewed request price. */
+    sku_rates: Array<{
+        mode: string;
+        service_tier: string | null;
+        sku: string;
+        unit: string;
+        currency_code: string;
+        units: string;
+        nanos: number;
+    }>;
+}
+/** Bounded provider metadata and separately dated published evidence; grants no run permission. */
+export interface DeepSeekInventoryDetails {
+    reader_version: "deepseek.inventory/v1";
+    metadata_valid: boolean;
+    modalities_complete: boolean;
+    effort_levels: string[] | null;
+    default_effort: string | null;
+    anthropic_system_prompt_update: "leading-only" | "in-history" | null;
+    published_model_version: string | null;
+    published_alias_of: string | null;
+    published_facts_revision: string;
+    published_facts_checked_on: string;
+    published_evidence_refs: string[];
+    conflicting_observation_digests: string[];
 }
