@@ -84,6 +84,21 @@ test("the kit's reserved placeholder hosts are legal and their lookalikes are no
   }
 });
 
+test("the CLI login loopback literals are legal and concrete destinations are not", () => {
+  for (const url of [
+    "http://127.0.0.1",
+    "http://127.0.0.1:${address.port}/callback?state=${encodeURIComponent(state",
+  ]) {
+    assert.deepEqual(scanTextContent("dist/provider/supplierCli.js", url, existsAlways), [], url);
+  }
+  for (const url of [
+    "http://127.0.0.1:8080/other",
+    "http://127.0.0.1.evil.example",
+  ]) {
+    onlyFailure(scanTextContent("dist/provider/supplierCli.js", url, existsAlways), "disallowed-url");
+  }
+});
+
 test("an exact absolute host path is allowed; a repository-relative lookalike is not", () => {
   const naming = 'const BOUNDARY = "/etc/millwork/run-authorization-boundary.json";';
   assert.deepEqual(scanTextContent("dist/runAuthorizationBoundary.js", naming, existsNever), []);

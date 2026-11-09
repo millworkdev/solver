@@ -2,8 +2,12 @@ import { basename } from 'node:path';
 import { buildSupplierStatement, checkSupplierStatement } from './index.js';
 import { SolverApiError } from "../errors.js";
 import { ProviderSecretReplayUnavailableError, PROVIDER_SECRET_REPLAY_RECOVERY } from "./index.js";
-import { mkdirSync, readFileSync, writeFileSync, rmSync, lstatSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { closeSync, constants, fchmodSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync, lstatSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { resolve, join, dirname } from "node:path";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createServer } from "node:http";
+import { homedir } from "node:os";
 import { ProviderClient, checkProviderFeed, validateProviderProfile, validateProviderPortableContext, PROVIDER_FEED_SCHEMA, PROVIDER_INCUMBENT_FEED_SCHEMA, PROVIDER_PORTABLE_VALIDATION_CONTEXT_SCHEMA, PROVIDER_PROFILE_SCHEMA } from "./index.js";
 const HELP = `Millwork supplier tools
 
@@ -161,9 +165,20 @@ const OFFER_HELP = `Millwork provider tools
   millwork offer supply request <request-id> [--json]
   millwork offer supply statements [--json]
   millwork offer supply statement <statement-id> [--json]
+  millwork offer login --client <name> [--scopes <scope,scope>] [--days 1|7|30 (default 30)] [--json]
+  millwork offer logout
 
-Plain check is offline and needs no key. Online commands use only
-MILLWORK_PROVIDER_API_KEY and MILLWORK_PROVIDER_API_URL. Read workspace and compare
+Plain check is offline and needs no key. Login stores a key for this user in
+the OS credential store for the API address used at login. It prints the
+granted scopes and does not print, log, or return the key. Logout revokes that
+key and removes it from this computer. When no OS store
+exists, login warns and uses a local file. The approval page signs the CLI in
+as you and lists the scopes your access includes; its address does not contain
+the key. When --days is omitted, the login requests 30 days.
+1, 7, and 30 stay available, and the approval link still expires
+in 10 minutes. Other online commands use MILLWORK_PROVIDER_API_KEY
+when it is set, otherwise the stored key for that same API address, and
+MILLWORK_PROVIDER_API_URL. Read workspace and compare
 its current revision before an explicit write. Calls make one attempt with no
 idempotency key; --yes confirms the deprecation intent, never grants approval from an owner or admin.
 Withdrawal and privileged writes require a separate owner or admin approval surface.
@@ -182,6 +197,13 @@ export function parseOfferCommand(args) {
         return { command: "help", flags: new Map() };
     if (command === "supply")
         return parseSupplyCommand(args);
+    if (command === "login")
+        return parseLoginCommand(args);
+    if (command === "logout") {
+        if (args.length > 1)
+            throw new OfferUsageError("Unsupported or repeated offer option. Use millwork offer --help.");
+        return { command: "logout", flags: new Map() };
+    }
     const allowed = {
         workspace: ["--json"],
         check: ["--profile", "--feed", "--context", "--at", "--json"],
@@ -245,6 +267,396 @@ function parseSupplyCommand(args) {
     }
     return { command: "supply", supply: { noun, ...(id ? { id } : {}) }, flags };
 }
+const LOGIN_SCOPES = ["provider:read", "provider:feed", "supply:read", "statement:read", "statement:preflight", "statement:commit"];
+function parseLoginCommand(args) {
+    const flags = new Map();
+    let position = 1;
+    while (position < args.length) {
+        const flag = args[position++];
+        if (!["--client", "--scopes", "--days", "--json"].includes(flag) || flags.has(flag))
+            throw new OfferUsageError("Unsupported or repeated offer option. Use millwork offer --help.");
+        if (flag === "--json")
+            flags.set(flag, true);
+        else {
+            const value = args[position++];
+            if (!value || value.startsWith("--"))
+                throw new OfferUsageError("An offer option needs its operand.");
+            flags.set(flag, value);
+        }
+    }
+    const client = flags.get("--client");
+    if (typeof client !== "string" || client.length < 1 || client.length > 100 || /[\u0000-\u001f]/.test(client) || client.includes("solverapi_")) {
+        throw new OfferUsageError("Login needs a client name, which is a label and not a credential.");
+    }
+    const days = flags.get("--days") ?? "30";
+    if (days !== "1" && days !== "7" && days !== "30")
+        throw new OfferUsageError("Login lifetime must be 1, 7, or 30 days.");
+    const scopes = typeof flags.get("--scopes") === "string" ? String(flags.get("--scopes")).split(",") : ["provider:read", "provider:feed"];
+    if (scopes.length < 1 || scopes.length > 6 || new Set(scopes).size !== scopes.length || scopes.some(scope => !LOGIN_SCOPES.includes(scope))) {
+        throw new OfferUsageError("Login scopes must be provider scopes.");
+    }
+    if (scopes.some(scope => scope.startsWith("statement:")))
+        throw new OfferUsageError("Statement scopes are not available on provider login.");
+    return { command: "login", flags };
+}
+export function createLoginPkce() {
+    const verifier = randomBytes(32).toString("base64url");
+    return { verifier, challenge: createHash("sha256").update(verifier).digest("base64url") };
+}
+export function providerKeyFile() {
+    return process.env.MILLWORK_PROVIDER_KEY_FILE || join(homedir(), ".millwork", "provider-key");
+}
+const PROVIDER_KEY_PATTERN = /^solverapi_(?:scoped|user)_[A-Za-z0-9_-]+$/;
+function acceptableProviderKey(key) {
+    return PROVIDER_KEY_PATTERN.test(key);
+}
+function packStoredCredential(key, apiBase) {
+    return `v1|${encodeURIComponent(apiBase)}|${key}`;
+}
+function unpackStoredCredential(raw, apiBase) {
+    const match = /^v1\|([^|]*)\|(solverapi_(?:scoped|user)_[A-Za-z0-9_-]+)$/.exec(raw.trim());
+    if (!match || !acceptableProviderKey(match[2]))
+        return undefined;
+    try {
+        if (decodeURIComponent(match[1]) !== apiBase)
+            return undefined;
+    }
+    catch {
+        return undefined;
+    }
+    return match[2];
+}
+export function osCredentialStore(kind) {
+    if (kind === "darwin")
+        return macCredentialStore();
+    if (kind === "linux")
+        return linuxCredentialStore();
+    return windowsCredentialStore();
+}
+function commandExists(command) {
+    const result = spawnSync(process.platform === "win32" ? "where" : "which", [command], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+    return result.status === 0;
+}
+function detectOsCredentialStore() {
+    if (process.platform === "darwin" && commandExists("security"))
+        return macCredentialStore();
+    if (process.platform === "linux" && commandExists("secret-tool"))
+        return linuxCredentialStore();
+    if (process.platform === "win32" && commandExists("powershell.exe"))
+        return windowsCredentialStore();
+    return { available: false, write() { throw new OfferUsageError("The provider key could not be stored."); }, read: () => undefined };
+}
+function macCredentialStore() {
+    return { available: true,
+        write(key) {
+            const result = spawnSync("security", ["-i"], { input: `add-generic-password -U -s millwork-provider-key -a millwork -w ${key}\n`, timeout: 10000, stdio: ["pipe", "ignore", "ignore"] });
+            if (result.status !== 0)
+                throw new OfferUsageError("The provider key could not be stored.");
+        },
+        read() {
+            const result = spawnSync("security", ["find-generic-password", "-s", "millwork-provider-key", "-a", "millwork", "-w"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"] });
+            const value = result.status === 0 ? result.stdout.trim() : "";
+            return value.length > 0 ? value : undefined;
+        },
+        delete() {
+            const result = spawnSync("security", ["delete-generic-password", "-s", "millwork-provider-key", "-a", "millwork"], { timeout: 10000, stdio: ["ignore", "ignore", "ignore"] });
+            if (result.status !== 0)
+                throw new OfferUsageError("The provider key could not be removed.");
+        } };
+}
+function linuxCredentialStore() {
+    const args = ["service", "millwork-provider-key", "account", "millwork"];
+    return { available: true,
+        write(key) {
+            const result = spawnSync("secret-tool", ["store", "--label=Millwork provider key", ...args], { input: key, timeout: 10000, stdio: ["pipe", "ignore", "ignore"] });
+            if (result.status !== 0)
+                throw new OfferUsageError("The provider key could not be stored.");
+        },
+        read() {
+            const result = spawnSync("secret-tool", ["lookup", ...args], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"] });
+            const value = result.status === 0 ? result.stdout.trim() : "";
+            return value.length > 0 ? value : undefined;
+        },
+        delete() {
+            const result = spawnSync("secret-tool", ["clear", ...args], { timeout: 10000, stdio: ["ignore", "ignore", "ignore"] });
+            if (result.status !== 0)
+                throw new OfferUsageError("The provider key could not be removed.");
+        } };
+}
+function windowsCredentialStore() {
+    const run = (script) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "-"], { input: script, encoding: "utf8", timeout: 10000, windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+    return { available: true,
+        write(key) {
+            const result = run(`$secret = @'\n${key}\n'@\n` + WINDOWS_WRITE);
+            if (result.status !== 0)
+                throw new OfferUsageError("The provider key could not be stored.");
+        },
+        read() {
+            const result = run(WINDOWS_READ);
+            const value = result.status === 0 ? result.stdout.trim() : "";
+            return value.length > 0 ? value : undefined;
+        },
+        delete() {
+            const result = run(WINDOWS_DELETE);
+            if (result.status !== 0)
+                throw new OfferUsageError("The provider key could not be removed.");
+        } };
+}
+const WINDOWS_DELETE = `Add-Type -Namespace Millwork -Name CredDelete -MemberDefinition @'
+using System; using System.Runtime.InteropServices;
+public class Native { [DllImport("advapi32", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool CredDelete(string target, uint type, uint flags); }
+'@
+if (-not [Millwork.CredDelete+Native]::CredDelete('millwork-provider-key', 1, 0)) { exit 1 }`;
+const WINDOWS_WRITE = `$bytes = [Text.Encoding]::UTF8.GetBytes($secret)
+Add-Type -Namespace Millwork -Name CredWrite -MemberDefinition @'
+using System; using System.Runtime.InteropServices;
+public class Native { [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] public struct CREDENTIAL { public uint Flags; public uint Type; public string TargetName; public string Comment; public long LastWritten; public uint CredentialBlobSize; public IntPtr CredentialBlob; public uint Persist; public uint AttributeCount; public IntPtr Attributes; public string TargetAlias; public string UserName; }
+[DllImport("advapi32", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool CredWrite(ref CREDENTIAL userCredential, uint flags); }
+'@
+$ptr = [Runtime.InteropServices.Marshal]::AllocCoTaskMem($bytes.Length)
+[Runtime.InteropServices.Marshal]::Copy($bytes, 0, $ptr, $bytes.Length)
+$cred = New-Object Millwork.CredWrite+Native+CREDENTIAL
+$cred.Type = 1; $cred.TargetName = 'millwork-provider-key'; $cred.CredentialBlobSize = [uint32]$bytes.Length; $cred.CredentialBlob = $ptr; $cred.Persist = 2; $cred.UserName = 'millwork'
+$ok = [Millwork.CredWrite+Native]::CredWrite([ref]$cred, 0)
+[Runtime.InteropServices.Marshal]::FreeCoTaskMem($ptr)
+if (-not $ok) { exit 1 }`;
+const WINDOWS_READ = `Add-Type -Namespace Millwork -Name CredRead -MemberDefinition @'
+using System; using System.Runtime.InteropServices;
+public class Native { [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] public struct CREDENTIAL { public uint Flags; public uint Type; public string TargetName; public string Comment; public long LastWritten; public uint CredentialBlobSize; public IntPtr CredentialBlob; public uint Persist; public uint AttributeCount; public IntPtr Attributes; public string TargetAlias; public string UserName; }
+[DllImport("advapi32", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool CredRead(string target, uint type, uint reservedFlag, out IntPtr credential); [DllImport("advapi32")] public static extern void CredFree(IntPtr cred); }
+'@
+$ptr = [IntPtr]::Zero
+if (-not [Millwork.CredRead+Native]::CredRead('millwork-provider-key', 1, 0, [ref]$ptr)) { exit 1 }
+$cred = [Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [type][Millwork.CredRead+Native+CREDENTIAL])
+$bytes = New-Object byte[] $cred.CredentialBlobSize
+[Runtime.InteropServices.Marshal]::Copy($cred.CredentialBlob, $bytes, 0, $bytes.Length)
+[Millwork.CredRead+Native]::CredFree($ptr)
+[Console]::Out.Write([Text.Encoding]::UTF8.GetString($bytes))`;
+export function storeProviderKey(key, filePath, apiBase) {
+    if (!acceptableProviderKey(key) || apiBase.length < 1 || /[\r\n|]/.test(apiBase))
+        throw new OfferUsageError("The provider key could not be stored.");
+    const directory = dirname(filePath);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (lstatSync(directory).isSymbolicLink())
+        throw new OfferUsageError("The provider key could not be stored.");
+    refuseCredentialSymlink(filePath);
+    const temporary = join(directory, `.provider-key.${randomBytes(8).toString("hex")}`);
+    const descriptor = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600);
+    try {
+        fchmodSync(descriptor, 0o600);
+        writeSync(descriptor, `${packStoredCredential(key, apiBase)}\n`);
+    }
+    finally {
+        closeSync(descriptor);
+    }
+    try {
+        refuseCredentialSymlink(filePath);
+    }
+    catch (error) {
+        rmSync(temporary, { force: true });
+        throw error;
+    }
+    renameSync(temporary, filePath);
+}
+function refuseCredentialSymlink(filePath) {
+    try {
+        if (lstatSync(filePath).isSymbolicLink())
+            throw new OfferUsageError("The provider key could not be stored.");
+    }
+    catch (error) {
+        if (error.code !== "ENOENT")
+            throw error;
+    }
+}
+export function readStoredProviderKey(filePath = providerKeyFile(), apiBase) {
+    try {
+        const descriptor = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        try {
+            const value = readFileSync(descriptor, "utf8");
+            return apiBase === undefined ? (acceptableProviderKey(value.trim()) ? value.trim() : undefined) : unpackStoredCredential(value, apiBase);
+        }
+        finally {
+            closeSync(descriptor);
+        }
+    }
+    catch {
+        return undefined;
+    }
+}
+export function storeProviderCredential(key, options) {
+    if (!acceptableProviderKey(key) || options.apiBase.length < 1 || /[\r\n|]/.test(options.apiBase))
+        throw new OfferUsageError("The provider key could not be stored.");
+    const packed = packStoredCredential(key, options.apiBase);
+    const store = options.osStore ?? detectOsCredentialStore();
+    if (store.available) {
+        store.write(packed);
+        return;
+    }
+    storeProviderKey(key, options.filePath ?? providerKeyFile(), options.apiBase);
+}
+export function readProviderCredential(filePath = providerKeyFile(), osStore = detectOsCredentialStore(), apiBase = process.env.MILLWORK_PROVIDER_API_URL) {
+    if (!apiBase)
+        return undefined;
+    return unpackStoredCredential(readPackedCredential(filePath, osStore) ?? "", apiBase);
+}
+function readPackedCredential(filePath, osStore) {
+    if (osStore.available)
+        return osStore.read();
+    try {
+        const descriptor = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        try {
+            return readFileSync(descriptor, "utf8");
+        }
+        finally {
+            closeSync(descriptor);
+        }
+    }
+    catch {
+        return undefined;
+    }
+}
+function forgetStoredCredential(filePath, osStore) {
+    if (osStore.available) {
+        if (!osStore.delete)
+            throw new OfferUsageError("The provider key could not be removed.");
+        osStore.delete();
+        return;
+    }
+    rmSync(filePath, { force: true });
+}
+export async function runProviderLogout(options = {}) {
+    const stdout = options.stdout ?? (chunk => { process.stdout.write(chunk); });
+    const stderr = options.stderr ?? (chunk => { process.stderr.write(chunk); });
+    const apiUrl = options.apiUrl ?? process.env.MILLWORK_PROVIDER_API_URL;
+    if (!apiUrl)
+        throw new OfferUsageError("Provider logout needs MILLWORK_PROVIDER_API_URL.");
+    const filePath = options.keyFile ?? providerKeyFile();
+    const osStore = options.osStore ?? detectOsCredentialStore();
+    const key = readProviderCredential(filePath, osStore, apiUrl);
+    if (!key) {
+        stderr("No provider key is stored for this API address.\n");
+        return;
+    }
+    const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    const revoked = await fetchImpl(new URL("/v1/providers/login-credentials/current/revoke", apiUrl), {
+        method: "POST", headers: {
+            authorization: `Bearer ${key}`, accept: "application/json", "content-type": "application/json",
+            "idempotency-key": randomBytes(16).toString("hex"),
+        },
+        body: "{}",
+    });
+    if (!revoked.ok)
+        throw new OfferUsageError("The provider key could not be revoked.");
+    forgetStoredCredential(filePath, osStore);
+    stdout("Revoked the provider key for this user and removed it from this computer. It was not printed.\n");
+}
+function storedCredentialBase(filePath, osStore) {
+    const match = /^v1\|([^|]*)\|solverapi_(?:scoped|user)_[A-Za-z0-9_-]+$/.exec((readPackedCredential(filePath, osStore) ?? "").trim());
+    if (!match)
+        return undefined;
+    try {
+        return decodeURIComponent(match[1]);
+    }
+    catch {
+        return undefined;
+    }
+}
+function waitForLoginCode(timeoutMs) {
+    const state = randomBytes(16).toString("base64url");
+    return new Promise((resolve, reject) => {
+        let resolveCode = () => undefined;
+        let rejectCode = () => undefined;
+        const code = new Promise((resolveResult, rejectResult) => { resolveCode = resolveResult; rejectCode = rejectResult; });
+        code.catch(() => undefined);
+        let settled = false;
+        let timer = setTimeout(() => undefined, timeoutMs);
+        const finish = (action) => { if (settled)
+            return; settled = true; clearTimeout(timer); action(); };
+        const fail = (message) => finish(() => rejectCode(new OfferUsageError(message)));
+        const server = createServer((request, response) => {
+            const url = new URL(request.url ?? "/", "http://127.0.0.1");
+            const callbackCode = url.searchParams.get("code");
+            const presented = url.searchParams.get("state") ?? "";
+            const stateMatches = presented.length === state.length && timingSafeEqual(Buffer.from(presented), Buffer.from(state));
+            if (request.method !== "GET" || url.pathname !== "/callback" || !callbackCode || !stateMatches) {
+                response.writeHead(400, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+                response.end("This login callback is incomplete.");
+                return;
+            }
+            response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+            response.end("<!doctype html><title>Provider login</title><p>Login approved. You can close this window.</p>");
+            finish(() => resolveCode(callbackCode));
+        });
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+            server.close();
+            fail("The approval window ended before the login finished.");
+        }, timeoutMs);
+        const close = () => new Promise(done => {
+            fail("The provider login did not start.");
+            server.close(() => done());
+        });
+        server.on("error", () => { fail("The local login callback could not start."); reject(new OfferUsageError("The local login callback could not start.")); });
+        server.listen(0, "127.0.0.1", () => {
+            const address = server.address();
+            if (!address || typeof address === "string") {
+                fail("The local login callback could not start.");
+                reject(new OfferUsageError("The local login callback could not start."));
+                return;
+            }
+            resolve({ redirectUri: `http://127.0.0.1:${address.port}/callback?state=${encodeURIComponent(state)}`, code, close });
+        });
+    });
+}
+export async function runProviderLogin(flags, options = {}) {
+    const stdout = options.stdout ?? (chunk => { process.stdout.write(chunk); });
+    const stderr = options.stderr ?? (chunk => { process.stderr.write(chunk); });
+    const apiUrl = options.apiUrl ?? process.env.MILLWORK_PROVIDER_API_URL;
+    const dashboardUrl = options.dashboardUrl ?? process.env.MILLWORK_PROVIDER_DASHBOARD_URL;
+    if (!apiUrl || !dashboardUrl)
+        throw new OfferUsageError("Provider login needs MILLWORK_PROVIDER_API_URL and MILLWORK_PROVIDER_DASHBOARD_URL.");
+    const days = Number(flags.get("--days") ?? "30");
+    const scopes = typeof flags.get("--scopes") === "string" ? String(flags.get("--scopes")).split(",") : ["provider:read", "provider:feed"];
+    const { verifier, challenge } = createLoginPkce();
+    const listener = await waitForLoginCode(options.timeoutMs ?? 10 * 60 * 1000);
+    const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    const filePath = options.keyFile ?? providerKeyFile();
+    const osStore = options.osStore ?? detectOsCredentialStore();
+    try {
+        const started = await fetchImpl(new URL("/v1/providers/login-handoffs", apiUrl), { method: "POST",
+            headers: { "content-type": "application/json", accept: "application/json" },
+            body: JSON.stringify({ client_name: flags.get("--client"), code_challenge: challenge, scopes, expires_in_days: days, redirect_uri: listener.redirectUri }) });
+        if (!started.ok)
+            throw new OfferUsageError("The provider login did not start.");
+        const start = await started.json();
+        if (!start.handoff_id || !start.approval_path?.startsWith("/provider/handoff/"))
+            throw new OfferUsageError("The provider login did not start.");
+        const approvalUrl = new URL(start.approval_path, dashboardUrl).toString();
+        if (approvalUrl.includes("solverapi_") || approvalUrl.includes("code="))
+            throw new OfferUsageError("The provider login did not start.");
+        stderr(`Open this page and approve the client, scopes, and lifetime:\n${approvalUrl}\n`);
+        const callbackCode = await listener.code;
+        const exchanged = await fetchImpl(new URL(`/v1/providers/login-handoffs/${encodeURIComponent(start.handoff_id)}/exchange`, apiUrl), {
+            method: "POST", headers: { "content-type": "application/json", accept: "application/json", "idempotency-key": randomBytes(16).toString("hex") },
+            body: JSON.stringify({ code: callbackCode, code_verifier: verifier })
+        });
+        if (!exchanged.ok)
+            throw new OfferUsageError("The provider login did not finish. Start it again. A finished login does not reveal the key a second time.");
+        const payload = await exchanged.json();
+        if (typeof payload.key !== "string")
+            throw new OfferUsageError("The provider login did not finish. Start it again. A finished login does not reveal the key a second time.");
+        const granted = Array.isArray(payload.scopes) ? payload.scopes.filter((scope) => typeof scope === "string") : [];
+        if (!osStore.available)
+            stderr(`No OS credential store is available. The provider key was stored in ${filePath}.\n`);
+        storeProviderCredential(payload.key, { filePath, osStore, apiBase: apiUrl });
+        stdout(flags.has("--json")
+            ? `${JSON.stringify({ stored: true, scopes: granted }, null, 2)}\n`
+            : `Stored the provider key for this user. Granted scopes: ${granted.join(", ") || "none"}. It was not printed.\n`);
+    }
+    finally {
+        await listener.close();
+    }
+}
 export async function runOfferCli(args) {
     const print = (value) => process.stdout.write(JSON.stringify(value, null, 2) + "\n");
     try {
@@ -257,10 +669,20 @@ export async function runOfferCli(args) {
             await runSupplierCli(["check", ...args.slice(1).filter(flag => flag !== "--json")]);
             return;
         }
-        const apiKey = process.env.MILLWORK_PROVIDER_API_KEY;
+        if (command === "login") {
+            await runProviderLogin(flags);
+            return;
+        }
+        if (command === "logout") {
+            await runProviderLogout();
+            return;
+        }
         const baseUrl = process.env.MILLWORK_PROVIDER_API_URL;
+        const apiKey = process.env.MILLWORK_PROVIDER_API_KEY ?? (baseUrl ? readProviderCredential(providerKeyFile(), detectOsCredentialStore(), baseUrl) : undefined);
         if (!apiKey || !baseUrl)
-            throw new OfferUsageError("Online offer commands require MILLWORK_PROVIDER_API_KEY and MILLWORK_PROVIDER_API_URL from your secret store.");
+            throw new OfferUsageError(!process.env.MILLWORK_PROVIDER_API_KEY && baseUrl && storedCredentialBase(providerKeyFile(), detectOsCredentialStore()) !== undefined
+                ? "The stored provider key belongs to a different API address."
+                : "Online offer commands require MILLWORK_PROVIDER_API_KEY and MILLWORK_PROVIDER_API_URL from your secret store.");
         const client = new ProviderClient({ apiKey, baseUrl });
         if (command === "supply") {
             const noun = supply.noun;

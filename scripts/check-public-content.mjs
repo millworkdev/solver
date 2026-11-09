@@ -64,6 +64,10 @@ export const allowedUrlPatterns = [
   /^https:\/\/app\.example(?:\/(?:millwork-check|healthz))?$/,
   /^http:\/\/existing-app\.invalid$/,
   /^http:\/\/127\.0\.0\.1:\$\{port\}\/$/,
+  // The CLI login callback binds an ephemeral loopback listener. These are
+  // the exact source literals, not a concrete host, port, or other path.
+  /^http:\/\/127\.0\.0\.1$/,
+  /^http:\/\/127\.0\.0\.1:\$\{address\.port\}\/callback\?state=\$\{encodeURIComponent\(state$/,
   // Pinned, checksum-verified CI tooling download only.
   /^https:\/\/github\.com\/rhysd\/actionlint\//,
 ];
